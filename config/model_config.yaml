@@ -1,0 +1,18 @@
+model:
+  provider: deepseek
+  model_name: deepseek-chat
+  base_url: https://api.deepseek.com
+  api_key_env: DEEPSEEK_API_KEY
+  temperature: 0.7
+
+embedding:
+  provider: local
+  model: BAAI/bge-m3
+
+memory:
+  vector_store: chromadb
+  persist_directory: ./data/vector_store
+
+world:
+  tick_interval_seconds: 1
+  default_time_scale: 1.0

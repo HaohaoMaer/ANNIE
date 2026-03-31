@@ -1,0 +1,17 @@
+npc:
+  name: "Example NPC"
+  personality:
+    traits: ["calm", "rational"]
+    values: ["logic", "efficiency"]
+  background:
+    biography: ""
+    past_events: []
+  goals:
+    short_term: []
+    long_term: []
+  relationships:
+    - target: "NPC_B"
+      type: "friend"
+      intensity: 0.7
+  memory_seed:
+    - "Initial important memory"

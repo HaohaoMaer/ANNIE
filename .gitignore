@@ -1,0 +1,31 @@
+# Environment variables
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Vector store data
+data/vector_store/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local model cache
+models/
+
+# Test / cache
+.pytest_cache/
+.ruff_cache/
+
+# Traces (generated output)
+data/traces/
