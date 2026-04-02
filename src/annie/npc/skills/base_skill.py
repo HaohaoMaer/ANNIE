@@ -68,14 +68,63 @@ class BaseSkill:
 
 
 class SkillRegistry:
-    """Discovers and manages all available skills from a directory."""
+    """Discovers and manages skills with base + personalized two-tier loading.
 
-    def __init__(self, skills_dir: str | Path = "data/skills"):
+    Base skills (from ``<skills_dir>/base/``) are always loaded for every NPC.
+    Personalized skills (from ``<skills_dir>/personalized/``) are loaded only
+    when their names appear in ``npc_skill_names``.
+
+    Falls back to flat-directory loading when the ``base/`` subdirectory does
+    not exist, preserving backward compatibility with the original layout.
+    """
+
+    def __init__(
+        self,
+        skills_dir: str | Path = "data/skills",
+        npc_skill_names: list[str] | None = None,
+    ):
         self._dir = Path(skills_dir)
+        self._base_dir = self._dir / "base"
+        self._personalized_dir = self._dir / "personalized"
         self.skills: dict[str, BaseSkill] = {}
-        self._load_all()
+
+        if self._base_dir.is_dir():
+            self._load_base_skills()
+            if npc_skill_names:
+                self._load_personalized_skills(npc_skill_names)
+        else:
+            # Fallback: flat directory (backward compat for tests)
+            self._load_all()
+
+    def _load_base_skills(self) -> None:
+        """Load all skills from data/skills/base/ — always available."""
+        self._load_from_dir(self._base_dir)
+
+    def _load_personalized_skills(self, names: list[str]) -> None:
+        """Load only the named skills from data/skills/personalized/."""
+        for name in names:
+            skill_dir = self._personalized_dir / name
+            if skill_dir.is_dir() and (skill_dir / "script.py").exists():
+                try:
+                    skill = BaseSkill(skill_dir)
+                    self.skills[skill.name] = skill
+                except Exception:
+                    pass
+
+    def _load_from_dir(self, directory: Path) -> None:
+        """Load all valid skill directories from a given path."""
+        if not directory.is_dir():
+            return
+        for child in sorted(directory.iterdir()):
+            if child.is_dir() and (child / "script.py").exists():
+                try:
+                    skill = BaseSkill(child)
+                    self.skills[skill.name] = skill
+                except Exception:
+                    pass
 
     def _load_all(self) -> None:
+        """Fallback: load all skills from a flat directory (no base/personalized split)."""
         if not self._dir.is_dir():
             return
         for child in sorted(self._dir.iterdir()):

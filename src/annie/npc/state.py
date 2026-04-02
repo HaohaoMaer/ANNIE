@@ -39,6 +39,18 @@ class RelationshipDef(BaseModel):
     intensity: float = 0.5
 
 
+class EnrichedRelationshipDef(RelationshipDef):
+    """Extended relationship with dimensions from the Social Graph.
+
+    Backward-compatible: accepted wherever RelationshipDef is expected.
+    """
+
+    trust: float = 0.5
+    familiarity: float = 0.0
+    emotional_valence: float = 0.0
+    status: str = "active"
+
+
 class NPCProfile(BaseModel):
     name: str
     personality: Personality = Field(default_factory=Personality)
@@ -46,6 +58,8 @@ class NPCProfile(BaseModel):
     goals: Goals = Field(default_factory=Goals)
     relationships: list[RelationshipDef] = Field(default_factory=list)
     memory_seed: list[str] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list)
+    tools: list[str] = Field(default_factory=list)
 
 
 class TaskStatus(str, Enum):

@@ -32,6 +32,23 @@ class TestNPCProfile:
         profile = load_npc_profile("data/npcs/example_npc.yaml")
         assert "Initial important memory" in profile.memory_seed
 
+    def test_skills_default_empty(self):
+        profile = load_npc_profile("data/npcs/example_npc.yaml")
+        assert profile.skills == []
+
+    def test_tools_default_empty(self):
+        profile = load_npc_profile("data/npcs/example_npc.yaml")
+        assert profile.tools == []
+
+    def test_skills_and_tools_from_dict(self):
+        profile = NPCProfile(
+            name="Test",
+            skills=["negotiation", "storytelling"],
+            tools=["perception"],
+        )
+        assert profile.skills == ["negotiation", "storytelling"]
+        assert profile.tools == ["perception"]
+
     def test_missing_file_raises(self):
         with pytest.raises(FileNotFoundError, match="NPC definition file not found"):
             load_npc_profile("nonexistent/npc.yaml")

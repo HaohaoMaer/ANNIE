@@ -12,6 +12,11 @@ def example_skill():
 
 
 @pytest.fixture
+def conversation_skill():
+    return BaseSkill("data/skills/base/conversation")
+
+
+@pytest.fixture
 def mock_npc_profile():
     return NPCProfile(
         name="Test NPC",
@@ -39,17 +44,26 @@ class TestBaseSkill:
         with pytest.raises(FileNotFoundError):
             BaseSkill("nonexistent/skill")
 
+    def test_conversation_skill_execute(self, conversation_skill):
+        result = conversation_skill.execute({"task": "greet", "npc_name": "Elder"})
+        assert result["skill_type"] == "conversation"
+        assert result["npc_name"] == "Elder"
+
+    def test_conversation_skill_render(self, conversation_skill, mock_npc_profile):
+        rendered = conversation_skill.render_prompt(mock_npc_profile)
+        assert "Test NPC" in rendered
+
 
 class TestSkillRegistry:
     def test_loads_skills_from_directory(self):
         registry = SkillRegistry("data/skills")
-        assert "example_skill" in registry.list_skills()
+        assert "conversation" in registry.list_skills()
 
     def test_get_skill(self):
         registry = SkillRegistry("data/skills")
-        skill = registry.get("example_skill")
+        skill = registry.get("conversation")
         assert skill is not None
-        assert skill.name == "example_skill"
+        assert skill.name == "conversation"
 
     def test_get_nonexistent_skill(self):
         registry = SkillRegistry("data/skills")
@@ -65,8 +79,8 @@ class TestSkillRegistry:
         registry = SkillRegistry("data/skills")
         descs = registry.get_descriptions()
         assert isinstance(descs, dict)
-        assert "example_skill" in descs
-        assert "Example Skill" in descs["example_skill"]
+        assert "conversation" in descs
+        assert "Conversation" in descs["conversation"]
 
     def test_nonexistent_directory(self):
         registry = SkillRegistry("nonexistent/dir")

@@ -1,4 +1,4 @@
-"""Executor - Carries out planned tasks via memory lookup, skills, and LLM.
+"""Executor - Carries out planned tasks via memory lookup, skills, tools, and LLM.
 
 LangGraph node function that processes each task from the Planner,
 gathering context and generating actions.
@@ -7,14 +7,19 @@ gathering context and generating actions.
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from annie.npc.skills.base_skill import SkillRegistry
 from annie.npc.state import AgentState, TaskStatus
 from annie.npc.sub_agents.memory_agent import MemoryAgent
 from annie.npc.tracing import EventType
+
+if TYPE_CHECKING:
+    from annie.npc.sub_agents.skill_agent import SkillAgent
+    from annie.npc.sub_agents.tool_agent import ToolAgent
+    from annie.social_graph.event_log import SocialEventLog
 
 logger = logging.getLogger(__name__)
 
@@ -31,17 +36,23 @@ or decides. Stay in character.
 
 
 class Executor:
-    """Processes tasks one by one, querying memory and optionally invoking skills."""
+    """Processes tasks one by one, querying memory and optionally invoking skills and tools."""
 
     def __init__(
         self,
         llm: BaseChatModel,
         memory_agent: MemoryAgent,
-        skill_registry: SkillRegistry | None = None,
+        skill_agent: SkillAgent | None = None,
+        tool_agent: ToolAgent | None = None,
+        event_log: SocialEventLog | None = None,
+        all_npc_names: list[str] | None = None,
     ):
         self.llm = llm
         self.memory_agent = memory_agent
-        self.skill_registry = skill_registry
+        self.skill_agent = skill_agent
+        self.tool_agent = tool_agent
+        self._event_log = event_log
+        self._all_npc_names = all_npc_names or []
 
     def __call__(self, state: AgentState) -> dict:
         """LangGraph node function. Returns partial state with execution results."""
@@ -74,13 +85,20 @@ class Executor:
 
                 # Check if a skill matches
                 skill_output = None
-                if self.skill_registry:
-                    skill_output = self._try_skill(task.description, npc, tracer)
+                if self.skill_agent:
+                    skill_output = self.skill_agent.try_skill(task.description, npc, tracer)
+
+                # Check if a tool can help
+                tool_output = None
+                if self.tool_agent:
+                    tool_output = self.tool_agent.try_tool(task.description, npc.name, tracer)
 
                 # Build the user prompt
                 user_content = f"Task: {task.description}\n\nMemory context:\n{memory_context}"
                 if skill_output:
                     user_content += f"\n\nSkill output:\n{skill_output}"
+                if tool_output:
+                    user_content += f"\n\nTool output:\n{tool_output}"
 
                 if tracer:
                     tracer.trace(
@@ -105,50 +123,43 @@ class Executor:
                 task.status = TaskStatus.DONE
                 task.result = response.content
                 updated_tasks.append(task)
-                results.append(
-                    {
-                        "task_id": task.id,
-                        "task_description": task.description,
-                        "action": response.content,
-                    }
-                )
+                result_entry = {
+                    "task_id": task.id,
+                    "task_description": task.description,
+                    "action": response.content,
+                }
+                results.append(result_entry)
+
+                # Phase 2: log social events when actions involve other NPCs.
+                self._maybe_log_social_event(npc, task.description, response.content)
 
         return {"tasks": updated_tasks, "execution_results": results}
 
-    def _try_skill(self, task_description: str, npc, tracer) -> str | None:
-        """Try to find and invoke a matching skill for the task."""
-        if not self.skill_registry:
-            return None
 
-        descs = self.skill_registry.get_descriptions()
-        # Simple keyword matching - find the first skill whose description
-        # shares significant words with the task
-        best_skill = None
-        best_overlap = 0
-        task_words = set(task_description.lower().split())
-        for name, desc in descs.items():
-            desc_words = set(desc.lower().split())
-            overlap = len(task_words & desc_words)
-            if overlap > best_overlap:
-                best_overlap = overlap
-                best_skill = name
+    def _maybe_log_social_event(self, npc, task_desc: str, action: str) -> None:
+        """If the action mentions another NPC, log a SocialEvent."""
+        if self._event_log is None:
+            return
 
-        if best_skill and best_overlap >= 2:
-            skill = self.skill_registry.get(best_skill)
-            if skill:
-                if tracer:
-                    tracer.trace(
-                        "executor",
-                        EventType.SKILL_INVOKE,
-                        output_summary=f"skill={best_skill}",
-                        metadata={"skill": best_skill},
-                    )
-                try:
-                    result = skill.execute({"task": task_description, "npc_name": npc.name})
-                    return str(result) if result else None
-                except Exception as e:
-                    logger.warning("Skill '%s' failed: %s", best_skill, e)
-        return None
+        # Detect mentioned NPCs by name matching.
+        mentioned = [
+            name for name in self._all_npc_names
+            if name != npc.name and name.lower() in action.lower()
+        ]
+        if not mentioned:
+            return
+
+        from annie.social_graph.models import EventVisibility, SocialEvent
+
+        evt = SocialEvent(
+            actor=npc.name,
+            target=mentioned[0],
+            action=task_desc[:80],
+            description=action[:300],
+            witnesses=mentioned[1:],
+            visibility=EventVisibility.WITNESSED,
+        )
+        self._event_log.append(evt)
 
 
 class _nullcontext:

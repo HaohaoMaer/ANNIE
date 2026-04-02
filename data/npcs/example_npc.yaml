@@ -15,3 +15,5 @@ npc:
       intensity: 0.7
   memory_seed:
     - "Initial important memory"
+  skills: []
+  tools: []

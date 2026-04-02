@@ -36,3 +36,7 @@ npc:
     - "The eastern trade route brings most of our supplies"
     - "Bandits were last seen near the northern pass three months ago"
     - "Winter is approaching and grain stores are lower than usual"
+  skills:
+    - "negotiation"
+    - "storytelling"
+  tools: []

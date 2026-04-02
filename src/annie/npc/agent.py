@@ -24,6 +24,10 @@ from annie.npc.reflector import Reflector
 from annie.npc.skills.base_skill import SkillRegistry
 from annie.npc.state import AgentState, Task, load_npc_profile
 from annie.npc.sub_agents.memory_agent import MemoryAgent
+from annie.npc.sub_agents.skill_agent import SkillAgent
+from annie.npc.sub_agents.social_agent import SocialAgent
+from annie.npc.sub_agents.tool_agent import ToolAgent
+from annie.npc.tools.tool_registry import ToolRegistry
 from annie.npc.tracing import Tracer
 
 logger = logging.getLogger(__name__)
@@ -46,6 +50,8 @@ class NPCAgent:
         npc_yaml_path: str | Path,
         config_path: str | Path = "config/model_config.yaml",
         chroma_client: chromadb.ClientAPI | None = None,
+        social_graph: Any | None = None,
+        event_log: Any | None = None,
     ):
         # Load configuration
         self.config: ModelConfig = load_model_config(config_path)
@@ -60,28 +66,92 @@ class NPCAgent:
         )
         self._episodic = EpisodicMemory(self.npc_profile.name, client=self._chroma_client)
         self._semantic = SemanticMemory(self.npc_profile.name, client=self._chroma_client)
+
+        # Phase 2: build Perception Pipeline if social_graph provided.
+        self._social_graph = social_graph
+        self._event_log = event_log
+        self._perception_builder = None
+
+        if social_graph is not None:
+            from annie.social_graph.perception.belief_evaluator import BeliefEvaluator
+            from annie.social_graph.perception.knowledge_filter import KnowledgeFilter
+            from annie.social_graph.perception.perception_builder import PerceptionBuilder
+
+            # Seed NPC's YAML relationships into the SocialGraph.
+            self._seed_social_graph()
+
+            kf = KnowledgeFilter(social_graph)
+            be = BeliefEvaluator(social_graph)
+            self._perception_builder = PerceptionBuilder(kf, be)
+
         self._relationship = RelationshipMemory(
             self.npc_profile.name,
             initial_relationships=self.npc_profile.relationships,
+            perception_builder=self._perception_builder,
         )
         self.memory_agent = MemoryAgent(self._episodic, self._semantic, self._relationship)
 
         # Seed initial memories from NPC profile
         self._seed_memories()
 
-        # Create skill registry
-        self.skill_registry = SkillRegistry("data/skills")
+        # Create skill registry (base + personalized from NPC profile)
+        self.skill_registry = SkillRegistry(
+            "data/skills",
+            npc_skill_names=self.npc_profile.skills,
+        )
+
+        # Create tool registry (base + personalized from NPC profile)
+        self.tool_registry = ToolRegistry(
+            npc_tool_names=self.npc_profile.tools,
+        )
+
+        # Wire MemoryQueryTool to MemoryAgent
+        memory_query_tool = self.tool_registry.get("memory_query")
+        if memory_query_tool and hasattr(memory_query_tool, "set_memory_agent"):
+            memory_query_tool.set_memory_agent(self.memory_agent)
+
+        # Create sub-agents
+        self.skill_agent = SkillAgent(self.skill_registry)
+        self.tool_agent = ToolAgent(self.tool_registry)
+        self.social_agent = SocialAgent(
+            self._relationship,
+            perception_builder=self._perception_builder,
+            npc_name=self.npc_profile.name,
+        )
 
         # Create node instances
+        all_npc_names = social_graph.get_all_npcs() if social_graph else []
         self._planner = Planner(self.llm)
-        self._executor = Executor(self.llm, self.memory_agent, self.skill_registry)
-        self._reflector = Reflector(self.llm, self.memory_agent)
+        self._executor = Executor(
+            self.llm,
+            self.memory_agent,
+            skill_agent=self.skill_agent,
+            tool_agent=self.tool_agent,
+            event_log=event_log,
+            all_npc_names=all_npc_names,
+        )
+        self._reflector = Reflector(self.llm, self.memory_agent, social_graph=social_graph)
 
         # Build LangGraph
         self._graph = self._build_graph()
 
         # Track last tracer for inspection
         self._last_tracer: Tracer | None = None
+
+    def _seed_social_graph(self) -> None:
+        """Seed NPC YAML relationships into the SocialGraph as initial edges."""
+        from annie.social_graph.models import RelationshipEdge
+
+        self._social_graph.add_npc(self.npc_profile.name)
+        for rel in self.npc_profile.relationships:
+            self._social_graph.add_npc(rel.target)
+            if self._social_graph.get_edge(self.npc_profile.name, rel.target) is None:
+                self._social_graph.set_edge(RelationshipEdge(
+                    source=self.npc_profile.name,
+                    target=rel.target,
+                    type=rel.type,
+                    intensity=rel.intensity,
+                ))
 
     def _seed_memories(self) -> None:
         """Seed initial memories from the NPC profile's memory_seed."""

@@ -33,6 +33,7 @@ def main():
     print(f"NPC loaded: {agent.npc_profile.name}")
     print(f"Traits: {', '.join(agent.npc_profile.personality.traits)}")
     print(f"Skills available: {agent.skill_registry.list_skills()}")
+    print(f"Tools available: {agent.tool_registry.list_tools()}")
     print()
 
     # Define a sequence of events

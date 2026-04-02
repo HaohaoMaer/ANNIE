@@ -183,7 +183,7 @@ npc:
 ```yaml
 model:
   provider: openai
-  model_name: gpt-4
+  model_name: deepseek-chat
   temperature: 0.7
 embedding:
   provider: openai

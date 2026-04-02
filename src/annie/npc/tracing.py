@@ -25,6 +25,7 @@ class EventType(str, Enum):
     MEMORY_READ = "memory_read"
     MEMORY_WRITE = "memory_write"
     SKILL_INVOKE = "skill_invoke"
+    TOOL_INVOKE = "tool_invoke"
     TASK_CREATED = "task_created"
     ERROR = "error"
 
@@ -146,6 +147,7 @@ class TraceFormatter:
         EventType.MEMORY_READ: "\033[35m",  # magenta
         EventType.MEMORY_WRITE: "\033[35m",  # magenta
         EventType.SKILL_INVOKE: "\033[34m",  # blue
+        EventType.TOOL_INVOKE: "\033[36m",  # cyan
         EventType.TASK_CREATED: "\033[1;37m",  # bold white
         EventType.ERROR: "\033[1;31m",  # bold red
     }
