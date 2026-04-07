@@ -7,12 +7,23 @@ Personalized tools are loaded per NPC based on their YAML definition.
 from __future__ import annotations
 
 from annie.npc.tools.base_tool import BaseTool
+from annie.npc.tools.docx_reader import DOCXReaderTool
+from annie.npc.tools.image_reader import ImageReaderTool
+from annie.npc.tools.item_inspection import ItemInspectionTool
+from annie.npc.tools.location_search import LocationSearchTool
 from annie.npc.tools.memory_query import MemoryQueryTool
+from annie.npc.tools.pdf_reader import PDFReaderTool
+from annie.npc.tools.pdf_ocr import PDFOCRTool
 from annie.npc.tools.perception import PerceptionTool
 
-# Mapping of personalized tool names to their classes.
-# Extend this dict when adding new personalized tools.
-_PERSONALIZED_TOOL_CLASSES: dict[str, type[BaseTool]] = {}
+_PERSONALIZED_TOOL_CLASSES: dict[str, type[BaseTool]] = {
+    "pdf_reader": PDFReaderTool,
+    "pdf_ocr": PDFOCRTool,
+    "image_reader": ImageReaderTool,
+    "docx_reader": DOCXReaderTool,
+    "item_inspection": ItemInspectionTool,
+    "location_search": LocationSearchTool,
+}
 
 
 class ToolRegistry:

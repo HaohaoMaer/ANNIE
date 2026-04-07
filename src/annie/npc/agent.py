@@ -13,6 +13,10 @@ import chromadb
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 
+from annie.npc.cognitive.belief_system import BeliefSystem
+from annie.npc.cognitive.emotional_state import EmotionalStateManager
+from annie.npc.cognitive.motivation import MotivationEngine
+from annie.npc.cognitive.decision_maker import DecisionMaker
 from annie.npc.config import ModelConfig, load_model_config
 from annie.npc.executor import Executor
 from annie.npc.llm import create_chat_model
@@ -91,6 +95,16 @@ class NPCAgent:
         )
         self.memory_agent = MemoryAgent(self._episodic, self._semantic, self._relationship)
 
+        # Create cognitive layer components
+        self.motivation_engine = MotivationEngine()
+        self.belief_system = BeliefSystem()
+        self.emotional_state_manager = EmotionalStateManager()
+        self.decision_maker = DecisionMaker()
+
+        # Initialize cognitive components from profile
+        self.belief_system.initialize_from_profile(self.npc_profile)
+        self.emotional_state_manager.initialize_from_profile(self.npc_profile)
+
         # Seed initial memories from NPC profile
         self._seed_memories()
 
@@ -129,6 +143,10 @@ class NPCAgent:
             tool_agent=self.tool_agent,
             event_log=event_log,
             all_npc_names=all_npc_names,
+            motivation_engine=self.motivation_engine,
+            belief_system=self.belief_system,
+            emotional_state_manager=self.emotional_state_manager,
+            decision_maker=self.decision_maker,
         )
         self._reflector = Reflector(self.llm, self.memory_agent, social_graph=social_graph)
 
@@ -180,6 +198,13 @@ class NPCAgent:
             AgentRunResult with tasks, execution results, reflection, and trace summary.
         """
         tracer = Tracer(self.npc_profile.name)
+
+        # Update cognitive state from event
+        self.emotional_state_manager.update_from_event(event)
+        self.motivation_engine.generate_motivations(
+            self.npc_profile,
+            {"current_event": event},
+        )
 
         # Build memory context for the event
         memory_context = self.memory_agent.build_context(event)
