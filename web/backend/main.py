@@ -70,9 +70,13 @@ _executor = ThreadPoolExecutor(max_workers=2)
 @dataclass
 class GameSession:
     game_id: str
-    queue: asyncio.Queue = field(default_factory=asyncio.Queue)
-    cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
     loop: asyncio.AbstractEventLoop = field(default=None)  # type: ignore[assignment]
+    # "initializing" | "running" | "game_over" | "error" | "ended"
+    status: str = "initializing"
+    # All events appended here; SSE clients read by index for reconnect support.
+    event_buffer: list = field(default_factory=list)
+    # Signals waiting SSE generators that new events are available.
+    notify: asyncio.Event = field(default_factory=asyncio.Event)
 
 
 # In-memory session registry.  Single process only.
@@ -91,98 +95,156 @@ async def create_game() -> dict:
     return {"game_id": game_id}
 
 
+@app.get("/api/games/active")
+async def get_active_game() -> dict:
+    """Return the most recent in-progress game session, if any.
+
+    The frontend calls this on page load to decide whether to offer a resume.
+    """
+    in_progress = [
+        s for s in GAMES.values()
+        if s.status not in ("game_over", "error", "ended")
+    ]
+    if not in_progress:
+        return {"game_id": None}
+
+    session = in_progress[-1]
+    turn_count = sum(1 for e in session.event_buffer if e.get("type") == "dialogue")
+    return {
+        "game_id": session.game_id,
+        "status": session.status,
+        "turn_count": turn_count,
+    }
+
+
+@app.get("/api/games/{game_id}/status")
+async def get_game_status(game_id: str) -> dict:
+    """Return status and progress of a specific game session."""
+    if game_id not in GAMES:
+        raise HTTPException(status_code=404, detail="Game not found")
+    session = GAMES[game_id]
+    turn_count = sum(1 for e in session.event_buffer if e.get("type") == "dialogue")
+    return {
+        "game_id": game_id,
+        "status": session.status,
+        "turn_count": turn_count,
+    }
+
+
 @app.get("/api/games/{game_id}/stream")
 async def stream_game(game_id: str) -> EventSourceResponse:
-    """SSE stream for a game.  Connect here after POST /api/games."""
+    """SSE stream for a game.
+
+    Supports reconnection: a returning client receives all buffered events
+    from the beginning (so the frontend can rebuild full state), then
+    continues receiving live events as they arrive.
+    """
     if game_id not in GAMES:
         raise HTTPException(status_code=404, detail="Game not found")
 
     session = GAMES[game_id]
 
     async def event_generator():
-        # ── Heartbeat task ────────────────────────────────────────────
-        # Prevents browser-side SSE timeout during long OCR / LLM phases.
-        async def heartbeat():
-            while not session.cancel_event.is_set():
-                await asyncio.sleep(15)
-                try:
-                    session.queue.put_nowait({"type": "heartbeat", "ts": int(time.time())})
-                except asyncio.QueueFull:
-                    pass
-
-        hb_task = asyncio.create_task(heartbeat())
-
         # ── Callback wired into game thread ───────────────────────────
         def callback(event: dict) -> None:
             """Thread-safe: called from ThreadPoolExecutor thread."""
-            session.loop.call_soon_threadsafe(session.queue.put_nowait, event)
+            session.event_buffer.append(event)
+            # Update status for terminal events
+            etype = event.get("type")
+            if etype == "game_over":
+                session.status = "game_over"
+            elif etype == "error":
+                session.status = "error"
+            elif event.get("__sentinel__"):
+                session.status = "ended"
+            # Wake up any waiting SSE generators
+            session.loop.call_soon_threadsafe(session.notify.set)
 
-        # ── Game thread ───────────────────────────────────────────────
-        def run_game() -> None:
-            try:
-                callback({"type": "initializing", "message": "正在加载配置..."})
-                config = load_model_config(str(CONFIG_PATH))
-
-                engine = WorldEngineAgent(
-                    script_folder=SCRIPT_FOLDER,
-                    config=config,
-                )
-                # Pass callback so read_all_files can stream per-file progress
-                engine.read_all_files(event_callback=callback)
-
-                callback({"type": "initializing", "message": "正在生成游戏流程..."})
-                engine.generate_game_flow()
-
-                callback({"type": "initializing", "message": "正在初始化角色..."})
-                engine.initialize_npcs()
-                engine.start_game()
-
-                initial_state = engine.get_initial_state()
-                callback({"type": "game_ready", "game_id": game_id, **initial_state})
-
-                engine.run_game_loop(max_rounds=2, event_callback=callback)
-                # game_over event is emitted inside run_game_loop
-
-                # Save session for replay after game ends
+        # ── Launch the game thread only on the first connection ───────
+        # If the session already has buffered events, we're reconnecting —
+        # the game thread is still running; skip re-launching it.
+        first_connection = len(session.event_buffer) == 0
+        if first_connection:
+            def run_game() -> None:
                 try:
-                    engine.save_session(REPLAYS_DIR, game_id=game_id)
-                except Exception as save_exc:
-                    import logging
-                    logging.getLogger(__name__).warning(f"Failed to save session: {save_exc}")
+                    callback({"type": "initializing", "message": "正在加载配置..."})
+                    config = load_model_config(str(CONFIG_PATH))
 
-            except Exception as exc:
-                callback({"type": "error", "message": str(exc)})
-            finally:
-                # Sentinel signals the SSE generator to close the stream.
-                session.loop.call_soon_threadsafe(
-                    session.queue.put_nowait, {"__sentinel__": True}
-                )
+                    engine = WorldEngineAgent(
+                        script_folder=SCRIPT_FOLDER,
+                        config=config,
+                    )
+                    engine.read_all_files(event_callback=callback)
 
-        # Launch the game in the thread pool without blocking the event loop.
-        session.loop.run_in_executor(_executor, run_game)
+                    callback({"type": "initializing", "message": "正在生成游戏流程..."})
+                    engine.generate_game_flow()
 
-        # ── Stream events to client ───────────────────────────────────
+                    callback({"type": "initializing", "message": "正在初始化角色..."})
+                    engine.initialize_npcs()
+                    engine.start_game()
+
+                    initial_state = engine.get_initial_state()
+                    callback({"type": "game_ready", "game_id": game_id, **initial_state})
+
+                    engine.run_game_loop(max_rounds=2, event_callback=callback)
+
+                    try:
+                        engine.save_session(REPLAYS_DIR, game_id=game_id)
+                    except Exception as save_exc:
+                        import logging
+                        logging.getLogger(__name__).warning(f"Failed to save session: {save_exc}")
+
+                except Exception as exc:
+                    callback({"type": "error", "message": str(exc)})
+                finally:
+                    session.loop.call_soon_threadsafe(
+                        session.event_buffer.append, {"__sentinel__": True}
+                    )
+                    session.loop.call_soon_threadsafe(session.notify.set)
+
+            session.loop.run_in_executor(_executor, run_game)
+
+        # ── Stream events to client (buffer-index based) ──────────────
+        # Both first connections and reconnections use this same loop.
+        # First connections start at idx=0 and see events as they arrive.
+        # Reconnections also start at idx=0 and replay all buffered events
+        # before catching up to live.
+        idx = 0
         try:
             while True:
+                # Drain all available events from buffer starting at idx
+                while idx < len(session.event_buffer):
+                    event = session.event_buffer[idx]
+                    idx += 1
+                    if event.get("__sentinel__"):
+                        return
+                    event_type = event.get("type", "message")
+                    yield {
+                        "event": event_type,
+                        "data": json.dumps(event, ensure_ascii=False),
+                    }
+
+                # If game is over and we've drained everything, close stream
+                if session.status in ("game_over", "error", "ended"):
+                    return
+
+                # Wait for new events; clear first, then re-check to avoid
+                # the race where an event arrived between drain and clear.
+                session.notify.clear()
+                if idx < len(session.event_buffer):
+                    continue  # new event slipped in before clear
                 try:
-                    event = await asyncio.wait_for(session.queue.get(), timeout=120.0)
+                    await asyncio.wait_for(session.notify.wait(), timeout=20.0)
                 except asyncio.TimeoutError:
-                    # Send a keepalive comment so the connection stays open.
-                    yield {"event": "heartbeat", "data": json.dumps({"type": "heartbeat", "ts": int(time.time())})}
-                    continue
-
-                if event.get("__sentinel__"):
-                    break
-
-                event_type = event.get("type", "message")
-                yield {
-                    "event": event_type,
-                    "data": json.dumps(event, ensure_ascii=False),
-                }
+                    # Heartbeat to keep the SSE connection alive
+                    yield {
+                        "event": "heartbeat",
+                        "data": json.dumps({"type": "heartbeat", "ts": int(time.time())}),
+                    }
         finally:
-            hb_task.cancel()
-            session.cancel_event.set()
-            GAMES.pop(game_id, None)
+            # Only evict finished sessions; keep in-progress ones for reconnect.
+            if session.status in ("game_over", "error", "ended"):
+                GAMES.pop(game_id, None)
 
     return EventSourceResponse(event_generator())
 

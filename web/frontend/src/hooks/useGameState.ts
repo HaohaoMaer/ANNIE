@@ -54,6 +54,7 @@ interface GameStore {
   reset: () => void;
   // live game actions
   startLiveGame: () => Promise<void>;
+  resumeLiveGame: (gameId: string) => void;
   handleSSEEvent: (event: SSEEvent) => void;
   setLiveStatus: (status: LiveGameStatus) => void;
 }
@@ -202,7 +203,20 @@ export const useGameState = create<GameStore>((set, get) => ({
       throw new Error(`Backend error: ${resp.status}`);
     }
     const { game_id } = await resp.json();
+    // Persist so the resume-check on next page load can find it.
+    try { localStorage.setItem("annie_game_id", game_id); } catch { /* ignore */ }
     set({ gameId: game_id });
+  },
+
+  resumeLiveGame: (gameId: string) => {
+    // Skip POST /api/games — just reconnect SSE to the existing session.
+    set({
+      mode: "live",
+      liveStatus: "initializing",
+      liveError: null,
+      initializingMessage: "正在恢复游戏...",
+      gameId,
+    });
   },
 
   setLiveStatus: (status) => set({ liveStatus: status }),
