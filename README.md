@@ -1,21 +1,22 @@
 # ANNIE — AI NPC Narrative Simulation Engine
 
-**ANNIE** is a LangGraph-powered multi-agent framework for building intelligent NPCs with persistent memory, dynamic social relationships, and autonomous behavior. It is a **simulation engine**, not a chatbot — each NPC is a complete agent that perceives the world, forms beliefs, feels emotions, and acts from its own motivations.
+**ANNIE** is a LangGraph-powered multi-agent framework for building intelligent NPCs with persistent memory, dynamic social relationships, and autonomous behavior. It is a **simulation engine**, not a chatbot — each NPC is an independent agent that perceives the world, forms beliefs, feels emotions, and acts from its own motivations.
 
-> **Live Demo: 午夜列车 (Midnight Train)** — A fully automated murder mystery where 6 AI-driven NPCs interrogate each other, deduce the killer, and vote on a verdict. Every run produces a unique story.
+> **Live Demo: 午夜列车 (Midnight Train)** — A fully automated murder mystery where 6 AI-driven NPCs interrogate each other, reason about evidence, and vote on a verdict. Every run produces a unique story.
 
 ---
 
-<!-- 截图占位：Web UI 首页 / 游戏主界面 -->
-<!-- TODO: 放一张 web/frontend 首页或游戏界面的截图 -->
-![Web UI Screenshot](docs/assets/screenshot_main.png)
+![ANNIE Web UI](docs/assets/main.png)
 
 ---
 
 ## Table of Contents
 
+- [Why ANNIE](#why-annie)
 - [Features](#features)
 - [Architecture](#architecture)
+- [How an NPC Thinks](#how-an-npc-thinks)
+- [Social Graph & Information Asymmetry](#social-graph--information-asymmetry)
 - [Demo — 午夜列车](#demo--午夜列车-midnight-train)
 - [Quick Start](#quick-start)
 - [Project Structure](#project-structure)
@@ -26,106 +27,206 @@
 
 ---
 
+## Why ANNIE
+
+Most "AI NPC" projects are wrappers around a single LLM prompt. ANNIE takes a different approach:
+
+| Typical AI NPC | ANNIE |
+|---|---|
+| Single prompt → single response | Full LangGraph agent: Plan → Execute → Reflect |
+| No memory between sessions | ChromaDB-backed episodic + semantic memory |
+| All NPCs share the same world view | Each NPC has a private subjective perception |
+| Relationships are static strings | Live social graph with trust-based gossip propagation |
+| No internal state | Cognitive layer: motivation, belief, emotion, decision |
+| Hard-coded behavior | File-based skill system, loaded per character |
+
+The result is NPCs that can surprise you — they lie, form alliances, change their minds, and occasionally say things that contradict what they believe.
+
+---
+
 ## Features
 
 | Feature | Description |
 |---|---|
-| **Autonomous NPC Agents** | Each NPC runs its own LangGraph `StateGraph` (Plan → Execute → Reflect) independently |
-| **Cognitive Layer** | Motivation engine, belief system, emotional state, and decision scoring — all per NPC |
-| **Social Graph** | Global truth layer for all inter-NPC relationships, separate from NPC subjective perception |
-| **Information Asymmetry** | NPCs have different knowledge states; gossip propagates through the social graph with trust-based distortion |
-| **Persistent Memory** | ChromaDB-backed episodic and semantic memory per NPC, compressed across ticks |
-| **Skill System** | File-based, two-tier skill loading (`base/` for all NPCs, `personalized/` per character YAML) |
-| **World Engine** | Game Master agent that reads script files (PDF/DOCX/images via OCR), summarizes characters, controls game phases, and tallies votes |
-| **Real-time Web UI** | Next.js frontend + FastAPI/SSE backend for live game visualization and replay |
+| **Autonomous NPC Agents** | Each NPC runs its own LangGraph `StateGraph` (Plan → Execute → Reflect) in isolation |
+| **Cognitive Layer** | Four interacting subsystems per NPC: `MotivationEngine`, `BeliefSystem`, `EmotionalStateManager`, `DecisionMaker` |
+| **Social Graph** | NetworkX DiGraph storing objective relationship truth; NPCs never own this data directly |
+| **Information Asymmetry** | 3-stage Perception Pipeline transforms graph truth into each NPC's subjective worldview |
+| **Gossip Propagation** | BFS-based event spreading with trust thresholds, visibility rules, and automatic distortion prefixes |
+| **Persistent Memory** | ChromaDB-backed episodic (timestamped events) and semantic (facts) memory, retrieved as compressed summaries |
+| **Two-tier Skill System** | Base skills loaded for every NPC; personalized skills loaded per character YAML definition |
+| **World Engine / Game Master** | Reads script files via OCR, summarizes characters, controls game phases, tallies votes |
+| **Resume Support** | Interrupted games persist in backend memory; reconnecting frontend replays full event history and continues live |
+| **Real-time Web UI** | Next.js + FastAPI/SSE: live dialogue stream, social graph visualization, clue board |
 
 ---
 
 ## Architecture
 
-ANNIE is built on three decoupled layers:
+ANNIE is built on three strictly decoupled layers. Data flows one way: World Engine orchestrates NPCs, NPCs query the Social Graph, never the reverse.
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                    Layer 3: World Engine                      │
-│                  (Director / Game Master)                     │
-│                                                               │
-│  WorldEngineAgent  ·  GameMaster  ·  ClueManager             │
-│  ScriptParser  ·  PhaseController  ·  TurnManager            │
-└───────────────────────────┬──────────────────────────────────┘
-                            │ spawns & orchestrates
-┌───────────────────────────▼──────────────────────────────────┐
-│                    Layer 1: NPC Agent Layer                   │
-│                                                               │
-│  ┌─────────────────────────────────────────────────────────┐ │
-│  │  NPCAgent  (LangGraph StateGraph)                        │ │
-│  │                                                          │ │
-│  │   Planner ──► Executor ──► Reflector                    │ │
-│  │                                                          │ │
-│  │   Cognitive Layer          Sub-Agents                   │ │
-│  │   • MotivationEngine       • MemoryAgent                │ │
-│  │   • BeliefSystem           • SocialAgent                │ │
-│  │   • EmotionalState         • SkillAgent                 │ │
-│  │   • DecisionMaker          • ToolAgent                  │ │
-│  │                                                          │ │
-│  │   Memory                   Skills / Tools               │ │
-│  │   • EpisodicMemory         • conversation               │ │
-│  │   • SemanticMemory         • observation / reasoning    │ │
-│  │   • RelationshipMemory     • deduction / interrogation  │ │
-│  └─────────────────────────────────────────────────────────┘ │
-└───────────────────────────┬──────────────────────────────────┘
-                            │ queries & updates
-┌───────────────────────────▼──────────────────────────────────┐
-│                  Layer 2: Social Graph Layer                  │
-│                   (Global Relationship Truth)                 │
-│                                                               │
-│  SocialGraph  ·  SocialEventLog  ·  PropagationEngine        │
-│  KnowledgeFilter  ·  BeliefEvaluator  ·  PerceptionBuilder   │
-└──────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                      Layer 3: World Engine                        │
+│                    (Director / Game Master)                       │
+│                                                                   │
+│   WorldEngineAgent  ·  GameMaster  ·  ClueManager                │
+│   ScriptParser  ·  PhaseController  ·  TurnManager               │
+│                                                                   │
+│   Reads: PDF / DOCX / images (OCR)                               │
+│   Controls: game phases, NPC turn order, vote counting           │
+└──────────────────────────┬───────────────────────────────────────┘
+                           │  spawns & orchestrates
+         ┌─────────────────┼─────────────────┐
+         ▼                 ▼                 ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    Layer 1: NPC Agent Layer                      │
+│                                                                  │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │  NPCAgent  (LangGraph StateGraph)                         │   │
+│  │                                                           │   │
+│  │   START → Planner → Executor → Reflector → END           │   │
+│  │                                                           │   │
+│  │   Cognitive Layer            Sub-Agents                  │   │
+│  │   ├─ MotivationEngine        ├─ MemoryAgent              │   │
+│  │   ├─ BeliefSystem            ├─ SocialAgent              │   │
+│  │   ├─ EmotionalStateManager   ├─ SkillAgent               │   │
+│  │   └─ DecisionMaker           └─ ToolAgent                │   │
+│  │                                                           │   │
+│  │   Memory                     Skills                      │   │
+│  │   ├─ EpisodicMemory          ├─ conversation             │   │
+│  │   ├─ SemanticMemory          ├─ observation / reasoning  │   │
+│  │   └─ RelationshipMemory      └─ deduction / interrogation│   │
+│  └──────────────────────────────────────────────────────────┘   │
+└──────────────────────────┬──────────────────────────────────────┘
+                           │  queries & applies deltas
+┌──────────────────────────▼──────────────────────────────────────┐
+│                   Layer 2: Social Graph Layer                    │
+│                    (Objective Relationship Truth)                │
+│                                                                  │
+│   SocialGraph (NetworkX)  ·  SocialEventLog  ·  PropagationEngine│
+│                                                                  │
+│   Perception Pipeline (read-only for NPCs):                     │
+│   KnowledgeFilter (L1) → BeliefEvaluator (L2) →                │
+│   PerceptionBuilder (L3) → EnrichedRelationshipDef              │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ### Key Design Principles
 
-- **NPCs perceive, they do not own.** World state lives in World Engine; relationship truth lives in Social Graph. NPCs hold only their subjective view.
-- **Information asymmetry by design.** The Perception Pipeline (L1 filter → L2 belief evaluation → L3 worldview assembly) transforms objective graph truth into each NPC's subjective knowledge.
-- **Opt-in integration.** All Phase 2/3 components wire in via optional constructor params — Phase 1 code paths are unchanged when `social_graph=None`.
-- **Context compression.** Memory is stored in ChromaDB and retrieved as compressed summaries, not raw history, to keep prompt sizes bounded.
+- **NPCs perceive, they do not own.** World state lives in World Engine; relationship truth lives in Social Graph. An NPC's "view" is always derived, never authoritative.
+- **Information asymmetry by design.** L1 filters what an NPC knows, L2 decides how much they believe it, L3 assembles their complete worldview. The same event can look completely different to two NPCs.
+- **Opt-in integration.** All Phase 2/3 components wire in via optional constructor params — `social_graph=None` gives you the clean Phase 1 single-NPC behavior.
+- **Context compression.** Memory is stored in ChromaDB and injected as compressed summaries, not raw history, keeping token costs bounded across long games.
+
+---
+
+## How an NPC Thinks
+
+Every time the World Engine calls an NPC, the following sequence runs inside a single LangGraph tick:
+
+```
+Event arrives (e.g. "林乘客 accused you of lying")
+        │
+        ▼
+EmotionalStateManager.update_from_event()
+   → keyword scan → update primary emotion + intensity
+        │
+        ▼
+MotivationEngine.generate_motivations()
+   → goal + event + relationship + script → ranked motivation list
+        │
+        ▼
+Planner  (LLM call)
+   → decomposes event into Task list  e.g. [gather_info, respond, update_beliefs]
+        │
+        ▼
+Executor  (per task)
+   ├─ MemoryAgent  → retrieve episodic + semantic + relationship context
+   ├─ SocialAgent  → build social context from Perception Pipeline
+   ├─ SkillAgent   → select & invoke skill (deduction / interrogation / …)
+   ├─ ToolAgent    → invoke tools (item inspection, location search, …)
+   └─ LLM call     → generate 【内心活动】 + 【说的话】 [+ 【投票】]
+        │
+        ▼
+Reflector  (LLM call)
+   → generate reflection → store EpisodicMemory + SemanticMemory
+   → parse RELATIONSHIP_UPDATES → apply GraphDeltas to SocialGraph
+```
+
+The split between `【内心活动】` (private) and `【说的话】` (public) is enforced at the prompt level — an NPC's stated position can deliberately contradict its inner reasoning.
+
+---
+
+## Social Graph & Information Asymmetry
+
+The Social Graph stores multi-dimensional relationship edges:
+
+```
+trust · familiarity · emotional_valence · intensity · status
+```
+
+When NPC **A** tries to learn about the relationship between **B** and **C**, the Perception Pipeline transforms objective graph truth into A's subjective view:
+
+```
+SocialGraph (god's eye)
+        │
+        ▼  L1: KnowledgeFilter
+   "What does A actually know?"
+   → filter by EventVisibility (PUBLIC / WITNESSED / PRIVATE / SECRET)
+        │
+        ▼  L2: BeliefEvaluator
+   "Does A believe it?"
+   → source trust → credibility bracket → BeliefStatus
+     (ACCEPTED / SKEPTICAL / DOUBTED / REJECTED)
+   → conflict detection (opposing sentiment about same person)
+        │
+        ▼  L3: PerceptionBuilder
+   "What's A's complete worldview?"
+   → EnrichedRelationshipDef list + perceived events
+   → build_social_context() string injected into NPC prompt
+```
+
+Gossip propagation uses BFS with:
+- Relationship-type willingness (trusted ally = 0.9 → enemy = 0.1)
+- Visibility rules (PUBLIC → all; WITNESSED → BFS reach; SECRET → needs trust ≥ 0.7)
+- Automatic distortion prefixes (`"Reportedly, …"` / `"Rumor has it that …"`) for hostile-path propagation
 
 ---
 
 ## Demo — 午夜列车 (Midnight Train)
 
-A complete murder mystery powered by a commercial 剧本杀 script. The system:
+A complete murder mystery powered by a commercial 剧本杀 script. Six AI characters — a detective, a flight attendant, and four passengers — are locked on a trans-Siberian train with a dead body.
 
-1. **OCRs** 6 character PDFs and 57 clue images from the script folder
-2. **Summarizes** each character into a structured JSON profile (identity, secrets, goals, murderer flag)
-3. **Initializes** 6 NPC agents, each with their own cognitive layer and private script knowledge
-4. **Runs** a multi-phase game loop: free discussion → deduction → accusation → voting
-5. **Announces** results: votes are tallied by `Counter`, compared against the real murderer, and narrated by the Game Master LLM
+![Game In Progress](docs/assets/game.png)
 
-Each NPC produces three outputs per turn:
-- `【内心活动】` — private inner reasoning from their secret script (not shared)
-- `【说的话】` — strategic public speech (may contradict inner thoughts)
-- `【投票】` — final accusation (voting phase only)
+### What the pipeline does
 
-<!-- 截图占位：游戏运行中的对话界面 -->
-<!-- TODO: 放一张游戏进行中、NPC对话流的截图 -->
-![Game In Progress](docs/assets/screenshot_game.png)
+1. **OCR** — reads 6 character PDFs + 57 clue images (EasyOCR + PyTorch, fallback to pypdf)
+2. **Summarize** — LLM condenses each character PDF into a structured JSON profile (identity, background, secrets, goals, `murderer: true/false`)
+3. **Initialize** — builds one `NPCAgent` per character, each seeded with their private script knowledge and a fresh `EphemeralClient` ChromaDB
+4. **Game loop** — World Engine cycles through phases, calling each NPC in turn order:
+   - `自由交流` (free discussion)
+   - `深度推理` (deep deduction)
+   - `投票指控` (vote & accuse)
+5. **Results** — `Counter` tallies votes, compares against real murderer, Game Master LLM narrates the reveal
 
-<!-- 截图占位：真相揭露界面 -->
-<!-- TODO: 放一张投票结果 / 真相揭露界面的截图 -->
-![Truth Reveal](docs/assets/screenshot_truth.png)
+### NPC output format (every turn)
+
+```
+【内心活动】  private reasoning — drawn from secret script, never shown to other NPCs
+【说的话】    public speech — strategic, may contradict inner thoughts
+【投票】      voting phase only — constrained to named NPC list
+```
 
 ### Running the Demo
 
-#### Terminal mode (no UI)
-
+**Terminal mode** (no UI, fastest):
 ```bash
 python scripts/run_midnight_train_demo.py
 ```
 
-#### Web UI mode
-
+**Web UI mode** (live visualization):
 ```bash
 # Terminal 1 — Backend (FastAPI + SSE)
 uvicorn web.backend.main:app --host 0.0.0.0 --port 8000 --reload
@@ -137,6 +238,8 @@ npm run dev
 # Open http://localhost:3000
 ```
 
+If the browser tab is refreshed mid-game, clicking Live will detect the in-progress session and offer to resume from where it left off.
+
 > **Note:** The `午夜列车/` script folder is not included in the repository (copyrighted commercial content). Place your own 剧本杀 script folder at the repo root and update `SCRIPT_FOLDER` in `web/backend/main.py`.
 
 ---
@@ -147,7 +250,7 @@ npm run dev
 
 - Python 3.11+
 - Node.js 18+ (web UI only)
-- A [DeepSeek API key](https://platform.deepseek.com/) (or any OpenAI-compatible endpoint)
+- A [DeepSeek API key](https://platform.deepseek.com/) — or any OpenAI-compatible endpoint (OpenAI, Qwen, Ollama, etc.)
 
 ### Install
 
@@ -155,11 +258,11 @@ npm run dev
 git clone https://github.com/HaohaoMaer/ANNIE.git
 cd ANNIE
 
-# Create and activate a virtual environment
+# Create environment
 conda create -n annie python=3.11 && conda activate annie
 # or: python -m venv .venv && source .venv/bin/activate
 
-# Install the package (editable)
+# Install (editable, includes dev tools)
 pip install -e ".[dev]"
 ```
 
@@ -167,11 +270,26 @@ pip install -e ".[dev]"
 
 ```bash
 cp .env.example .env
-# Edit .env and set your API key:
+# Set your API key:
 # DEEPSEEK_API_KEY=your_key_here
 ```
 
-Model, embedding, and memory settings live in `config/model_config.yaml`. The defaults use DeepSeek and local `BAAI/bge-m3` embeddings.
+Model, embedding, and memory settings are in `config/model_config.yaml` — see [Configuration](#configuration).
+
+### Run your first NPC
+
+```python
+from annie.npc.agent import NPCAgent
+from annie.npc.config import load_model_config
+from annie.npc.state import load_npc_profile
+
+config = load_model_config("config/model_config.yaml")
+profile = load_npc_profile("data/npcs/example_npc.yaml")
+agent = NPCAgent(profile=profile, config=config)
+
+result = agent.run("A stranger approaches you at the market.")
+print(result.action)
+```
 
 ---
 
@@ -180,39 +298,45 @@ Model, embedding, and memory settings live in `config/model_config.yaml`. The de
 ```
 ANNIE/
 ├── config/
-│   └── model_config.yaml          # Model provider, embeddings, memory backend
+│   └── model_config.yaml              # Model provider, embeddings, memory backend
 ├── data/
 │   ├── npcs/
-│   │   └── example_npc.yaml       # Minimal NPC definition for testing
+│   │   └── example_npc.yaml           # Minimal NPC definition for testing
 │   └── skills/
-│       ├── base/                  # conversation, observation, reasoning
-│       └── personalized/          # deduction, interrogation (loaded per NPC)
-├── docs/                          # Guides and explanations
+│       ├── base/                      # conversation, observation, reasoning
+│       │   └── <skill>/               # description.md · script.py · prompt.j2
+│       └── personalized/              # deduction, interrogation (loaded per NPC)
+├── docs/                              # Guides, explanations, screenshots
 ├── scripts/
-│   └── run_midnight_train_demo.py # Full pipeline demo
+│   └── run_midnight_train_demo.py     # Full pipeline demo (terminal)
 ├── src/annie/
 │   ├── npc/
-│   │   ├── agent.py               # NPCAgent — top-level LangGraph orchestrator
-│   │   ├── planner.py             # Decomposes events into tasks
-│   │   ├── executor.py            # Invokes sub-agents, logs social events
-│   │   ├── reflector.py           # Updates memory, applies graph deltas
-│   │   ├── cognitive/             # Motivation, belief, emotion, decision
-│   │   ├── memory/                # Episodic, semantic, relationship memory
-│   │   ├── sub_agents/            # Memory, social, skill, tool sub-agents
-│   │   └── tools/                 # PDF/DOCX/image readers, item/location tools
+│   │   ├── agent.py                   # NPCAgent — top-level orchestrator
+│   │   ├── planner.py                 # Event → Task list (LLM)
+│   │   ├── executor.py                # Task execution, social event logging
+│   │   ├── reflector.py               # Post-execution memory + graph updates
+│   │   ├── cognitive/                 # MotivationEngine, BeliefSystem,
+│   │   │                              # EmotionalStateManager, DecisionMaker
+│   │   ├── memory/                    # EpisodicMemory, SemanticMemory,
+│   │   │                              # RelationshipMemory (ChromaDB)
+│   │   ├── sub_agents/                # MemoryAgent, SocialAgent,
+│   │   │                              # SkillAgent, ToolAgent
+│   │   └── tools/                     # PDF/DOCX/image readers,
+│   │                                  # item inspection, location search
 │   ├── social_graph/
-│   │   ├── graph.py               # SocialGraph (NetworkX DiGraph)
-│   │   ├── event_log.py           # Append-only social event store
-│   │   ├── propagation.py         # BFS gossip propagation with trust filtering
-│   │   └── perception/            # 3-stage perception pipeline
+│   │   ├── graph.py                   # SocialGraph (NetworkX DiGraph)
+│   │   ├── event_log.py               # Append-only social event store
+│   │   ├── propagation.py             # BFS gossip with trust filtering
+│   │   └── perception/                # 3-stage perception pipeline (L1/L2/L3)
 │   └── world_engine/
-│       ├── world_engine_agent.py  # WorldEngineAgent — Game Master
-│       ├── clue_manager.py        # Clue discovery tracking
-│       └── game_master/           # Phase control, turn management, rule enforcement
-├── tests/                         # 286 unit tests
+│       ├── world_engine_agent.py      # WorldEngineAgent — Game Master
+│       ├── clue_manager.py            # Clue discovery tracking
+│       └── game_master/               # PhaseController, TurnManager,
+│                                      # RuleEnforcer, ScriptProgression
+├── tests/                             # 286 unit tests
 └── web/
-    ├── backend/                   # FastAPI + SSE real-time event bridge
-    └── frontend/                  # Next.js 16 + Tailwind + D3 social graph viz
+    ├── backend/                       # FastAPI + SSE real-time event bridge
+    └── frontend/                      # Next.js 16 · Tailwind · D3 · shadcn/ui
 ```
 
 ---
@@ -226,12 +350,12 @@ model:
   provider: deepseek
   model_name: deepseek-chat
   base_url: https://api.deepseek.com
-  api_key_env: DEEPSEEK_API_KEY
+  api_key_env: DEEPSEEK_API_KEY   # name of the env var holding your key
   temperature: 0.7
 
 embedding:
   provider: local
-  model: BAAI/bge-m3        # runs locally, no API key needed
+  model: BAAI/bge-m3              # runs fully locally, no API key needed
 
 memory:
   vector_store: chromadb
@@ -242,26 +366,34 @@ world:
   default_time_scale: 1.0
 ```
 
-To use a different OpenAI-compatible provider (e.g. OpenAI, Qwen, Ollama), change `base_url`, `model_name`, and the `api_key_env` variable name.
+**Switching providers** — change `base_url` + `model_name` + `api_key_env` and set the corresponding env var:
+
+| Provider | `base_url` | `model_name` example |
+|---|---|---|
+| DeepSeek | `https://api.deepseek.com` | `deepseek-chat` |
+| OpenAI | `https://api.openai.com/v1` | `gpt-4o` |
+| Ollama (local) | `http://localhost:11434/v1` | `qwen2.5:14b` |
 
 ---
 
 ## Running Tests
 
 ```bash
-# All tests (286 total)
+# All 286 tests
 pytest
 
-# Single file
+# Single module
 pytest tests/test_npc/test_agent.py
 
-# Skip integration tests that call the LLM API
+# Skip tests that require a live LLM API
 pytest -m "not integration"
 
-# Lint
+# Lint and format
 ruff check src/
 ruff format src/
 ```
+
+Tests use `chromadb.EphemeralClient()` with unique collection names per test — no cross-test memory pollution, no files written to disk.
 
 ---
 
@@ -269,39 +401,41 @@ ruff format src/
 
 | Phase | Status | Description |
 |---|---|---|
-| Phase 1 | Done | Single NPC agent — LangGraph workflow, two-tier skill system, 4 sub-agents |
-| Phase 2 | Done | Multi-NPC — Social Graph, information asymmetry, perception pipeline |
-| Phase 3 | Done | 剧本杀 Demo — World Engine as Game Master, cognitive layer, web UI |
-| Phase 4 | Planned | Emergent storytelling + narrative control |
+| Phase 1 | ✅ Done | Single NPC agent — LangGraph workflow, two-tier skill system, 4 sub-agents, 165 tests |
+| Phase 2 | ✅ Done | Multi-NPC — Social Graph, information asymmetry, 3-stage perception pipeline, 121 new tests |
+| Phase 3 | ✅ Done | 剧本杀 Demo — World Engine as Game Master, cognitive layer, web UI, resume support |
+| Phase 4 | Planned | Emergent storytelling, narrative control, personality-driven perception bias |
 
 ---
 
 ## Tech Stack
 
-**Backend**
-- [LangGraph](https://github.com/langchain-ai/langgraph) — agent workflow orchestration
-- [LangChain](https://github.com/langchain-ai/langchain) — LLM abstraction layer
-- [ChromaDB](https://www.trychroma.com/) — vector memory store
-- [NetworkX](https://networkx.org/) — social relationship graph
-- [EasyOCR](https://github.com/JaidedAI/EasyOCR) — script image parsing
-- [FastAPI](https://fastapi.tiangolo.com/) — real-time SSE game API
+**Core engine**
+- [LangGraph](https://github.com/langchain-ai/langgraph) `≥0.2` — agent workflow (`StateGraph`)
+- [LangChain](https://github.com/langchain-ai/langchain) `≥0.3` — LLM abstraction, prompt templates
+- [ChromaDB](https://www.trychroma.com/) `≥0.5` — vector memory store
+- [NetworkX](https://networkx.org/) `≥3.3` — social relationship graph
+- [Pydantic](https://docs.pydantic.dev/) `≥2.7` — data validation throughout
+- [EasyOCR](https://github.com/JaidedAI/EasyOCR) `≥1.7` — script image and PDF parsing
 
-**Frontend**
-- [Next.js 16](https://nextjs.org/) + React 19
-- [Tailwind CSS](https://tailwindcss.com/) + shadcn/ui
-- [D3.js](https://d3js.org/) — social graph visualization
-- [Framer Motion](https://www.framer.com/motion/) — animations
-- [Zustand](https://github.com/pmndrs/zustand) — state management
+**Web layer**
+- [FastAPI](https://fastapi.tiangolo.com/) — REST + SSE real-time event stream
+- [Next.js 16](https://nextjs.org/) + React 19 — frontend framework
+- [Tailwind CSS](https://tailwindcss.com/) + [shadcn/ui](https://ui.shadcn.com/) — UI components
+- [D3.js](https://d3js.org/) `v7` — live social graph visualization
+- [Framer Motion](https://www.framer.com/motion/) — dialogue animations
+- [Zustand](https://github.com/pmndrs/zustand) `v5` — frontend state management
 
 ---
 
 ## Contributing
 
-1. Fork the repo and create a feature branch
-2. Run `pytest` and `ruff check src/` before opening a PR
-3. Keep new components in the correct layer — NPC Agent, Social Graph, or World Engine
-4. Never hardcode model names; always read from `config/model_config.yaml`
+1. Fork the repo and create a feature branch off `main`
+2. Keep components in the correct layer — NPC Agent, Social Graph, or World Engine. Cross-layer dependencies go downward only.
+3. Never hardcode model names in source — always read from `config/model_config.yaml`
+4. Run `pytest` and `ruff check src/` before opening a PR
+5. Integration tests (marked `@pytest.mark.integration`) require a real API key and are skipped in CI by default
 
 ---
 
-<p align="center">Built with LangGraph · DeepSeek · ChromaDB</p>
+<p align="center">Built with LangGraph · DeepSeek · ChromaDB · NetworkX</p>
