@@ -7,12 +7,13 @@ NPCs never own this data; they query it via the Perception Pipeline.
 from __future__ import annotations
 
 from collections import defaultdict
+from typing import Any
 
 import networkx as nx
 
+from annie.social_graph.knowledge_manager import KnowledgeManager, SharedKnowledge
 from annie.social_graph.models import GraphDelta, KnowledgeItem, RelationshipEdge
 
-# Numeric fields on RelationshipEdge and their (min, max) clamp ranges.
 _CLAMP_RANGES: dict[str, tuple[float, float]] = {
     "intensity": (0.0, 1.0),
     "trust": (0.0, 1.0),
@@ -31,8 +32,8 @@ class SocialGraph:
 
     def __init__(self) -> None:
         self._graph: nx.DiGraph = nx.DiGraph()
-        # npc_name -> list of KnowledgeItems
         self._knowledge: dict[str, list[KnowledgeItem]] = defaultdict(list)
+        self._knowledge_manager: KnowledgeManager = KnowledgeManager()
 
     # ------------------------------------------------------------------
     # Node management
@@ -165,3 +166,42 @@ class SocialGraph:
             for ki_data in items:
                 g.record_knowledge(KnowledgeItem(**ki_data))
         return g
+
+    def add_shared_knowledge(self, knowledge: SharedKnowledge) -> None:
+        """Add shared knowledge to the graph.
+
+        Args:
+            knowledge: The shared knowledge to add.
+        """
+        self._knowledge_manager.add_shared_knowledge(knowledge)
+
+    def get_shared_knowledge(self, npc_name: str | None = None) -> list[SharedKnowledge]:
+        """Get shared knowledge visible to an NPC.
+
+        Args:
+            npc_name: Name of the NPC (None = all public knowledge).
+
+        Returns:
+            List of visible shared knowledge.
+        """
+        return self._knowledge_manager.get_shared_knowledge(npc_name)
+
+    def grant_shared_knowledge(self, npc_name: str, knowledge_id: str) -> bool:
+        """Grant shared knowledge to an NPC.
+
+        Args:
+            npc_name: Name of the NPC.
+            knowledge_id: ID of the knowledge.
+
+        Returns:
+            True if granted, False if not found.
+        """
+        return self._knowledge_manager.grant_knowledge(npc_name, knowledge_id)
+
+    def get_knowledge_manager(self) -> KnowledgeManager:
+        """Get the knowledge manager instance.
+
+        Returns:
+            The knowledge manager.
+        """
+        return self._knowledge_manager

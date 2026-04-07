@@ -29,3 +29,20 @@ models/
 
 # Traces (generated output)
 data/traces/
+
+# Commercial game script materials (copyrighted content)
+午夜列车/
+data/npcs/何侦探/
+data/npcs/撒乘客/
+data/npcs/林乘客/
+data/npcs/白乘客/
+data/npcs/董乘客/
+data/npcs/鸥乘务/
+
+# IDE - Trae
+.trae/
+
+# Node.js
+node_modules/
+.next/
+tsconfig.tsbuildinfo
