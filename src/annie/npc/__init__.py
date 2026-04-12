@@ -1,4 +1,4 @@
 # NPC Agent Layer
-from annie.npc.agent import AgentRunResult, NPCAgent
+from annie.npc.agent import NPCAgent
 
-__all__ = ["AgentRunResult", "NPCAgent"]
+__all__ = ["NPCAgent"]

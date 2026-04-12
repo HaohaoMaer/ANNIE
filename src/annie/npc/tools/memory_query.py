@@ -19,6 +19,16 @@ class MemoryQueryTool(BaseTool):
 
     name = "memory_query"
     description = "Queries NPC memory for relevant context about a topic or entity."
+    requires_action = False
+
+    parameters_schema = {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "The topic or question to query memory for"},
+            "task": {"type": "string", "description": "Alternative to query (uses task description as search query)"},
+        },
+        "required": [],  # Either 'query' or 'task' should be provided; validated in execute()
+    }
 
     def __init__(self) -> None:
         self._memory_agent: MemoryAgent | None = None
@@ -29,6 +39,8 @@ class MemoryQueryTool(BaseTool):
 
     def execute(self, context: dict) -> dict:
         query = context.get("query", context.get("task", ""))
+        if not isinstance(query, str) or not query.strip():
+            return {"tool": self.name, "error": "query must be a non-empty string", "results": ""}
         if not self._memory_agent:
             return {"tool": self.name, "results": "Memory agent not available."}
 

@@ -28,6 +28,7 @@ class EventType(str, Enum):
     TOOL_INVOKE = "tool_invoke"
     TASK_CREATED = "task_created"
     ERROR = "error"
+    SAFETY_VIOLATION = "safety_violation"
 
 
 class TraceEvent(BaseModel):
@@ -150,6 +151,7 @@ class TraceFormatter:
         EventType.TOOL_INVOKE: "\033[36m",  # cyan
         EventType.TASK_CREATED: "\033[1;37m",  # bold white
         EventType.ERROR: "\033[1;31m",  # bold red
+        EventType.SAFETY_VIOLATION: "\033[1;31m",  # bold red
     }
     RESET = "\033[0m"
     DIM = "\033[2m"

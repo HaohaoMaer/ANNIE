@@ -6,10 +6,12 @@ Uses ChromaDB as the vector store for similarity-based retrieval.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 
 import chromadb
 from pydantic import BaseModel, Field
 
+from annie.npc.memory.chroma_lock import ChromaWriteGuard
 from annie.npc.memory.episodic import _sanitize_collection_name
 
 
@@ -43,19 +45,48 @@ class SemanticMemory:
         category: str = "general",
         metadata: dict | None = None,
     ) -> str:
-        """Store a semantic fact. Returns the document ID."""
+        """Store a semantic fact. Returns the document ID.
+
+        Write is protected by the module-level ChromaDB write lock.
+        """
         doc_id = uuid.uuid4().hex[:12]
         meta = {
             **(metadata or {}),
             "category": category,
             "npc_name": self._npc_name,
+            "stored_at": datetime.now(UTC).isoformat(),
         }
-        self._collection.add(
-            documents=[fact],
-            ids=[doc_id],
-            metadatas=[meta],
-        )
+        with ChromaWriteGuard():
+            self._collection.add(
+                documents=[fact],
+                ids=[doc_id],
+                metadatas=[meta],
+            )
         return doc_id
+
+    def prune_stale(self, ttl_days: int) -> int:
+        """Delete facts older than ttl_days, excluding 'seed' category. Returns count deleted."""
+        cutoff = datetime.now(UTC).timestamp() - ttl_days * 86400
+        all_docs = self._collection.get(include=["metadatas"])
+        if not all_docs["ids"]:
+            return 0
+        ids_to_delete = []
+        for doc_id, meta in zip(all_docs["ids"], all_docs["metadatas"]):
+            if meta.get("category") == "seed":
+                continue
+            stored_at_str = meta.get("stored_at", "")
+            if not stored_at_str:
+                continue
+            try:
+                stored_ts = datetime.fromisoformat(stored_at_str).timestamp()
+            except (ValueError, TypeError):
+                continue
+            if stored_ts < cutoff:
+                ids_to_delete.append(doc_id)
+        if ids_to_delete:
+            with ChromaWriteGuard():
+                self._collection.delete(ids=ids_to_delete)
+        return len(ids_to_delete)
 
     def retrieve(self, query: str, k: int = 5) -> list[SemanticFact]:
         """Retrieve the most relevant facts by similarity search."""

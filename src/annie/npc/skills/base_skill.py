@@ -1,20 +1,49 @@
-"""Skill base class and loader.
+"""Skill definitions for the NPC Agent layer.
 
-Each skill is a directory containing:
-  - description.md   (what the skill does)
-  - script.py        (execution logic)
-  - prompt.j2        (Jinja2 prompt template)
+Two classes coexist during the refactor:
+
+* ``BaseSkill`` — the legacy directory-based skill loader (description.md +
+  script.py + prompt.j2). Retained for existing tests.
+* ``SkillDef`` — the Phase-3 spec contract: a name + description +
+  allowed_tools list + prompt_template string. No script, no schema; Skills
+  are *not* LLM-callable — the Executor injects the template when a task
+  matches.
+
+``SkillRegistry`` remains the legacy directory-crawling loader; Phase 3
+adds matching/injection logic in ``sub_agents/skill_agent.py``.
 """
 
 from __future__ import annotations
 
 import importlib.util
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import ModuleType
 
 import jinja2
 
 from annie.npc.state import NPCProfile
+
+
+# ---------------------------------------------------------------------------
+# New SkillDef — Phase-3 contract
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class SkillDef:
+    """A skill is a prompt template plus a whitelist of allowed tools.
+
+    Skills are *not* tools: they are not callable via tool_call. When a
+    task matches a skill, the Executor injects ``prompt_template`` into the
+    current LLM system prompt and restricts available tools to
+    ``allowed_tools``.
+    """
+
+    name: str
+    description: str
+    prompt_template: str
+    allowed_tools: list[str] = field(default_factory=list)
 
 
 class BaseSkill:

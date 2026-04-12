@@ -119,15 +119,11 @@ class ToolAgent:
         return best_tool if best_tool and best_overlap >= 2 else None
 
     def invoke(self, tool_name: str, context: dict) -> dict:
-        """Execute the named tool and return its output."""
+        """Execute the named tool using safe_execute (validates inputs, catches errors)."""
         tool = self.tool_registry.get(tool_name)
         if not tool:
             return {}
-        try:
-            return tool.execute(context)
-        except Exception as e:
-            logger.warning("Tool '%s' failed: %s", tool_name, e)
-            return {}
+        return tool.safe_execute(context)
 
     def try_tool(
         self,

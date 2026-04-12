@@ -33,30 +33,18 @@ class Goals(BaseModel):
     long_term: list[str] = Field(default_factory=list)
 
 
-class RelationshipDef(BaseModel):
-    target: str
-    type: str
-    intensity: float = 0.5
+class NPCProfile(BaseModel):
+    """Minimal NPC identity carrier after decouple refactor.
 
-
-class EnrichedRelationshipDef(RelationshipDef):
-    """Extended relationship with dimensions from the Social Graph.
-
-    Backward-compatible: accepted wherever RelationshipDef is expected.
+    `relationships` and `cognitive_*` fields have been removed — world engines
+    parse those from YAML and fold them into the natural-language
+    ``character_prompt`` injected via ``AgentContext``.
     """
 
-    trust: float = 0.5
-    familiarity: float = 0.0
-    emotional_valence: float = 0.0
-    status: str = "active"
-
-
-class NPCProfile(BaseModel):
     name: str
     personality: Personality = Field(default_factory=Personality)
     background: Background = Field(default_factory=Background)
     goals: Goals = Field(default_factory=Goals)
-    relationships: list[RelationshipDef] = Field(default_factory=list)
     memory_seed: list[str] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
     tools: list[str] = Field(default_factory=list)
@@ -79,7 +67,7 @@ class Task(BaseModel):
 
 
 class AgentState(TypedDict, total=False):
-    npc_profile: NPCProfile
+    agent_context: Any  # AgentContext instance — forward-declared to avoid import cycle
     input_event: str
     tasks: list[Task]
     current_task: Task | None
@@ -87,6 +75,11 @@ class AgentState(TypedDict, total=False):
     reflection: str
     memory_context: str
     tracer: Any  # Tracer instance, typed as Any to avoid circular import with LangGraph
+    # Loop control (dimension 1)
+    retry_count: int
+    max_retries: int
+    loop_reason: str
+    react_steps: list[dict[str, Any]]
 
 
 def load_npc_profile(path: str | Path) -> NPCProfile:
