@@ -54,6 +54,43 @@ class MemoryRecallTool(ToolDef):
         }
 
 
+class MemoryGrepInput(BaseModel):
+    pattern: str = Field(..., description="Case-insensitive substring to match against memory content.")
+    category: str | None = Field(
+        None,
+        description="Optional single-category filter (e.g. 'episodic'). None = all categories.",
+    )
+    metadata_filters: dict[str, Any] | None = Field(
+        None,
+        description="Optional metadata equality filters (e.g. {'person': '李四'}).",
+    )
+    k: int = Field(20, description="Max number of records.")
+
+
+class MemoryGrepTool(ToolDef):
+    name = "memory_grep"
+    description = (
+        "Literal/metadata search over NPC long-term memory. "
+        "Use this for proper-name lookups or exact-phrase recall where vector "
+        "similarity is unreliable. Complements memory_recall (semantic)."
+    )
+    input_schema = MemoryGrepInput
+    is_read_only = True
+
+    def call(self, input: BaseModel | dict, ctx: ToolContext) -> Any:
+        inp = _coerce(input, MemoryGrepInput)
+        records = ctx.agent_context.memory.grep(
+            inp.pattern,
+            category=inp.category,
+            metadata_filters=inp.metadata_filters,
+            k=inp.k,
+        )
+        return {
+            "pattern": inp.pattern,
+            "records": [r.model_dump() for r in records],
+        }
+
+
 class MemoryStoreInput(BaseModel):
     content: str = Field(..., description="The content of the memory to store.")
     category: str = Field(MEMORY_CATEGORY_SEMANTIC, description="Memory category label.")
@@ -88,9 +125,11 @@ class InnerMonologueTool(ToolDef):
 
     def call(self, input: BaseModel | dict, ctx: ToolContext) -> Any:
         inp = _coerce(input, InnerMonologueInput)
+        thoughts = ctx.agent_context.extra.setdefault("_inner_thoughts", [])
+        thoughts.append(inp.thought)
         return {"thought": inp.thought}
 
 
 def default_builtin_tools() -> list[ToolDef]:
     """Return a fresh list of built-in ToolDef instances."""
-    return [MemoryRecallTool(), MemoryStoreTool(), InnerMonologueTool()]
+    return [MemoryRecallTool(), MemoryGrepTool(), MemoryStoreTool(), InnerMonologueTool()]

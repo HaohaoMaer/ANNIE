@@ -73,12 +73,13 @@ class AgentState(TypedDict, total=False):
     current_task: Task | None
     execution_results: list[dict[str, Any]]
     reflection: str
-    memory_context: str
+    working_memory: str
     tracer: Any  # Tracer instance, typed as Any to avoid circular import with LangGraph
     # Loop control (dimension 1)
     retry_count: int
     max_retries: int
     loop_reason: str
+    last_tasks: list[Task]
     react_steps: list[dict[str, Any]]
     # Executor tool-use loop (per-run working memory)
     messages: list[Any]  # list[BaseMessage]; Any to keep state module free of langchain import

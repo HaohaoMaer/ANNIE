@@ -20,6 +20,7 @@ MEMORY_CATEGORY_EPISODIC = "episodic"
 MEMORY_CATEGORY_SEMANTIC = "semantic"
 MEMORY_CATEGORY_REFLECTION = "reflection"
 MEMORY_CATEGORY_IMPRESSION = "impression"
+MEMORY_CATEGORY_TODO = "todo"
 
 
 class MemoryRecord(BaseModel):
@@ -42,6 +43,19 @@ class MemoryInterface(Protocol):
         k: int = 5,
     ) -> list[MemoryRecord]:
         """Retrieve up to *k* relevant records, optionally filtered by category list."""
+        ...
+
+    def grep(
+        self,
+        pattern: str,
+        category: str | None = None,
+        metadata_filters: dict[str, Any] | None = None,
+        k: int = 20,
+    ) -> list[MemoryRecord]:
+        """Substring-match entry.content (case-insensitive), optionally filtered by
+        category / metadata. Sorted by ``created_at`` newest first; ``relevance_score``
+        is a fixed 1.0 since literal hits have no similarity meaning.
+        """
         ...
 
     def remember(

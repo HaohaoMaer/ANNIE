@@ -63,6 +63,37 @@ class DefaultMemoryInterface(MemoryInterface):
             ))
         return records[:k]
 
+    def grep(
+        self,
+        pattern: str,
+        category: str | None = None,
+        metadata_filters: dict[str, Any] | None = None,
+        k: int = 20,
+    ) -> list[MemoryRecord]:
+        if not pattern:
+            return []
+        clauses: list[dict[str, Any]] = []
+        if category is not None:
+            clauses.append({"category": category})
+        if metadata_filters:
+            clauses.extend({mk: mv} for mk, mv in metadata_filters.items())
+        if not clauses:
+            where: dict[str, Any] | None = None
+        elif len(clauses) == 1:
+            where = clauses[0]
+        else:
+            where = {"$and": clauses}
+        entries = self._store.grep_entries(pattern, where=where, k=k)
+        return [
+            MemoryRecord(
+                content=e.content,
+                category=e.category,
+                metadata=e.metadata,
+                relevance_score=1.0,
+            )
+            for e in entries
+        ]
+
     def remember(
         self,
         content: str,

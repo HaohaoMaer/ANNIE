@@ -68,8 +68,45 @@ def test_single_npc_single_run(tmp_path, tmp_chroma):
     assert "Alice" in response.dialogue
     assert "tavern" in response.reflection.lower()
 
+    # Executor system prompt must expose memory category catalog and working_memory.
+    executor_first_call = llm.calls[1]
+    system_content = executor_first_call[0].content
+    assert "<memory_categories>" in system_content
+    assert "<working_memory>" in system_content
+    # Skip path must not render <task>.
+    trigger = executor_first_call[-1].content
+    assert "<input_event>" in trigger
+    assert "<task>" not in trigger
+
     records = we.memory_for("alice").recall("newcomer", k=5)
     assert records, "memory should contain reflection records"
+
+
+def test_inner_monologue_tool_populates_agent_response(tmp_path, tmp_chroma):
+    we = DefaultWorldEngine(chroma_client=tmp_chroma, history_dir=tmp_path / "hist")
+    we.register_profile("dora", NPCProfile(name="Dora"))
+
+    think_call = AIMessage(
+        content="",
+        tool_calls=[{
+            "name": "inner_monologue",
+            "args": {"thought": "I wonder who they are."},
+            "id": "call_thought",
+        }],
+    )
+    reply = AIMessage(content="Dora stares silently.")
+
+    llm = _StubLLM([
+        '{"skip": true}',
+        think_call,
+        reply,
+        "REFLECTION: pondered.\nFACTS: []\nRELATIONSHIP_NOTES: []",
+    ])
+
+    ctx = we.build_context("dora", event="A stranger enters.")
+    response = NPCAgent(llm=llm).run(ctx)
+
+    assert "I wonder who they are." in response.inner_thought
 
 
 def test_tool_use_loop_dispatches_tool(tmp_path, tmp_chroma):

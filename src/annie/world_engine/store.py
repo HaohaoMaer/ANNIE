@@ -123,6 +123,43 @@ class MemoryStore:
         )
         return self._parse_results(results)
 
+    def grep_entries(
+        self,
+        pattern: str,
+        where: dict[str, Any] | None = None,
+        k: int = 20,
+    ) -> list[MemoryEntry]:
+        """Substring (case-insensitive) match against entry content.
+
+        Pulls candidates via ``collection.get(where=...)`` and filters in
+        Python; returns up to ``k`` entries sorted by ``created_at`` desc.
+        """
+        if not pattern:
+            return []
+        if self._collection.count() == 0:
+            return []
+        kwargs: dict[str, Any] = {"include": ["documents", "metadatas"]}
+        if where:
+            kwargs["where"] = where
+        results = self._collection.get(**kwargs)
+        needle = pattern.casefold()
+        hits: list[tuple[MemoryEntry, str]] = []
+        for doc, meta in zip(results["documents"], results["metadatas"]):
+            if needle not in str(doc).casefold():
+                continue
+            ts = str(meta.get("created_at", "")) if meta else ""
+            hits.append((
+                MemoryEntry(
+                    content=doc,
+                    category=str(meta.get("category", "semantic")) if meta else "semantic",
+                    metadata={k: v for k, v in (meta or {}).items() if k != "category"},
+                    relevance_score=1.0,
+                ),
+                ts,
+            ))
+        hits.sort(key=lambda p: p[1], reverse=True)
+        return [h[0] for h in hits[:k]]
+
     def get_by_category(self, category: str) -> list[MemoryEntry]:
         results = self._collection.get(
             where={"category": category},

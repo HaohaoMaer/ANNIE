@@ -18,25 +18,18 @@ from annie.npc.tracing import EventType
 logger = logging.getLogger(__name__)
 
 NPC_PLANNER_STATIC_PROMPT = """\
-You are an NPC planning module. Your job is to analyze an incoming event and decide
-whether it requires a multi-step plan or can be handled directly.
+You are an NPC planning module. Your job is to decide whether the incoming
+event needs multi-step decomposition.
 
-Choose ONE of these two response formats:
+DEFAULT: respond with {"skip": true, "reason": "<brief>"}.
 
-Option A — Create a task plan (for complex events requiring multiple steps):
-[
-  {"description": "clear actionable step", "priority": 8},
-  {"description": "another step", "priority": 6}
-]
-1-5 tasks, priority 0-10 (higher = more important).
+Only return a task list when the event truly requires sequential stages
+that cannot fit in a single in-character reply. Examples that warrant a
+list: "先去厨房取证据再回来质询"; "连问三个人比对口供". Examples that
+DO NOT: 单轮对话回应, 情绪反应, 表态, 内心活动.
 
-Option B — Skip planning (for simple, single-step events):
-{"skip": true, "reason": "brief explanation of why no planning needed"}
-
-Use Option B when: the event requires a single obvious response, is purely reactive,
-or is straightforward enough to handle without decomposition.
-Use Option A when: the event involves gathering information from multiple sources,
-requires analysis before action, or has multiple distinct phases.
+Task list format (only when needed):
+[{"description": "...", "priority": 0-10}]   // 最多 3 条，仅用于真正需要顺序推进的场景
 
 Respond ONLY with valid JSON — no prose, no markdown fences.
 """
@@ -60,24 +53,36 @@ class Planner:
             parts.append(f"## World Rules\n{ctx.world_rules}")
         if getattr(ctx, "situation", ""):
             parts.append(f"## Current Situation\n{ctx.situation}")
-        if getattr(ctx, "history", ""):
-            parts.append(f"## Recent History\n{ctx.history}")
+        # NB: history is intentionally NOT rendered here. It is consumed only
+        # by the Executor as a message sequence; rendering it twice would push
+        # the Planner toward over-decomposition.
         return "\n\n".join(parts)
 
     def __call__(self, state: AgentState) -> dict:
         tracer = state.get("tracer")
         ctx = state.get("agent_context")
         input_event = state["input_event"]
-        memory_context = state.get("memory_context", "")
+        working_memory = state.get("working_memory", "")
+        retry_count = state.get("retry_count", 0)
+        loop_reason = state.get("loop_reason", "")
+        last_tasks = state.get("last_tasks", [])
 
         span = tracer.node_span("planner") if tracer else _nullcontext()
         with span:
             dynamic_prompt = self._build_dynamic_prompt(ctx)
             system_prompt = self._static_prompt + ("\n\n" + dynamic_prompt if dynamic_prompt else "")
 
-            user_content = f"Event: {input_event}"
-            if memory_context:
-                user_content += f"\n\nMemory context:\n{memory_context}"
+            user_content = f"Event: {input_event}\n\nWorking memory (pre-retrieved):\n{working_memory or '(none)'}"
+            if retry_count > 0:
+                prev_descs = [t.description for t in last_tasks] if last_tasks else []
+                user_content += (
+                    "\n\n<retry_context>\n"
+                    "Previous attempt produced no usable results.\n"
+                    f"Reason: {loop_reason or 'unknown'}\n"
+                    f"Previous tasks: {json.dumps(prev_descs, ensure_ascii=False)}\n"
+                    "Revise the plan or skip.\n"
+                    "</retry_context>"
+                )
 
             messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_content)]
 

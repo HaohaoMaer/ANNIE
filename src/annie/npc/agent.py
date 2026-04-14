@@ -17,7 +17,7 @@ from langgraph.graph import END, START, StateGraph
 
 from annie.npc.context import AgentContext
 from annie.npc.context_budget import ContextBudget
-from annie.npc.executor import Executor
+from annie.npc.executor import SKIP_TASK_MARKER, Executor
 from annie.npc.planner import Planner
 from annie.npc.reflector import Reflector
 from annie.npc.response import AgentResponse
@@ -68,18 +68,19 @@ class NPCAgent:
             "current_task": None,
             "execution_results": [],
             "reflection": "",
-            "memory_context": memory_agent.build_context(context.input_event),
+            "working_memory": memory_agent.build_context(context.input_event),
             "tracer": tracer,
             "retry_count": 0,
             "max_retries": self.max_retries,
             "loop_reason": "",
+            "last_tasks": [],
             "react_steps": [],
             "messages": [],
             "context_budget": ContextBudget(model_ctx_limit=self.model_ctx_limit),
         }
 
         final_state = graph.invoke(initial)
-        return _build_response(dict(final_state))
+        return _build_response(dict(final_state), context)
 
 
 # ----------------------------------------------------------------------
@@ -100,13 +101,18 @@ def _build_graph(planner: Planner, executor: Executor, reflector: Reflector):
 
 
 def _executor_with_skip(executor: Executor):
-    """If Planner produced no tasks (skip), synthesize a single task from the event."""
+    """If Planner produced no tasks (skip), synthesize a marker task so the
+    Executor renders only ``<input_event>`` (no redundant ``<task>``).
+
+    Also snapshots the task list into ``state["last_tasks"]`` so Planner can
+    reference the previous attempt if the retry edge fires.
+    """
     def _run(state: AgentState) -> dict:
         tasks = state.get("tasks", [])
         if not tasks:
-            evt = state.get("input_event", "")
-            tasks = [Task(description=evt or "Respond to the current situation.", priority=5)]
+            tasks = [Task(description=SKIP_TASK_MARKER, priority=5)]
             state["tasks"] = tasks
+        state["last_tasks"] = list(tasks)
         return executor(state)
     return _run
 
@@ -125,13 +131,15 @@ def _should_retry(state: AgentState) -> str:
     return "done"
 
 
-def _build_response(state: dict) -> AgentResponse:
+def _build_response(state: dict, context: AgentContext) -> AgentResponse:
     results = state.get("execution_results", [])
     dialogue_parts = [r["action"] for r in results if r.get("action")]
     dialogue = "\n".join(dialogue_parts)
+    thoughts = context.extra.get("_inner_thoughts", []) or []
+    inner_thought = "\n".join(str(t) for t in thoughts)
     return AgentResponse(
         dialogue=dialogue,
-        inner_thought="",
+        inner_thought=inner_thought,
         actions=[],
         memory_updates=[],
         reflection=state.get("reflection", ""),

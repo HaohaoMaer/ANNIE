@@ -31,8 +31,11 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
+from annie.npc.prompts import MEMORY_CATEGORIES_BLOCK, render_identity
 from annie.npc.state import AgentState, Task, TaskStatus
 from annie.npc.tracing import EventType
+
+SKIP_TASK_MARKER = "__skip__"
 
 if TYPE_CHECKING:
     from annie.npc.sub_agents.tool_agent import ToolAgent
@@ -42,23 +45,27 @@ logger = logging.getLogger(__name__)
 MAX_TOOL_LOOPS: int = 8
 
 EXECUTOR_SYSTEM_TEMPLATE = """\
-<character>
-{character_prompt}
-</character>
+{identity}
 <world_rules>
 {world_rules}
 </world_rules>
 <situation>
 {situation}
 </situation>
+<memory_categories>
+{memory_categories}
+</memory_categories>
+<working_memory>
+{working_memory}
+</working_memory>
 <available_skills>
 {skills}
 </available_skills>
 
-You are acting as this NPC. Respond in-character. You may call tools
-(e.g. memory_recall, memory_store, inner_monologue) to ground your answer;
-when you have everything you need, produce a final in-character reply with
-no further tool calls.
+You are acting as this NPC. Respond in-character. You may call the tools
+listed in this turn's tool schema to ground your answer; when you have
+everything you need, produce a final in-character reply with no further
+tool calls.
 """
 
 
@@ -79,6 +86,7 @@ class Executor:
         ctx = state.get("agent_context")
         tasks = state.get("tasks", [])
         budget = state.get("context_budget")
+        working_memory = state.get("working_memory", "")
 
         span = tracer.node_span("executor") if tracer else _nullcontext()
         with span:
@@ -88,7 +96,7 @@ class Executor:
 
             for task in tasks:
                 task.status = TaskStatus.IN_PROGRESS
-                messages = self._initial_messages(ctx, task)
+                messages = self._initial_messages(ctx, task, working_memory)
                 final_ai = self._run_loop(messages, ctx, budget, tracer)
 
                 task.status = TaskStatus.DONE
@@ -167,8 +175,12 @@ class Executor:
         return last_ai
 
     # ---- message assembly ----------------------------------------------
-    def _initial_messages(self, ctx: Any, task: Task) -> list[BaseMessage]:
-        character_prompt = getattr(ctx, "character_prompt", "") or ""
+    def _initial_messages(
+        self,
+        ctx: Any,
+        task: Task,
+        working_memory: str = "",
+    ) -> list[BaseMessage]:
         world_rules = getattr(ctx, "world_rules", "") or ""
         situation = getattr(ctx, "situation", "") or ""
         history = getattr(ctx, "history", "") or ""
@@ -176,18 +188,24 @@ class Executor:
         npc_id = getattr(ctx, "npc_id", "") or ""
 
         system = SystemMessage(content=EXECUTOR_SYSTEM_TEMPLATE.format(
-            character_prompt=character_prompt,
+            identity=render_identity(ctx),
             world_rules=world_rules,
             situation=situation,
+            memory_categories=MEMORY_CATEGORIES_BLOCK,
+            working_memory=working_memory.strip() or "(none)",
             skills="(none this run)",
         ))
 
         history_msgs = _history_to_messages(history, npc_id)
 
-        trigger = HumanMessage(content=(
-            f"<input_event>{input_event}</input_event>\n"
-            f"<task>{task.description}</task>"
-        ))
+        if task.description == SKIP_TASK_MARKER:
+            trigger_content = f"<input_event>{input_event}</input_event>"
+        else:
+            trigger_content = (
+                f"<input_event>{input_event}</input_event>\n"
+                f"<task>{task.description}</task>"
+            )
+        trigger = HumanMessage(content=trigger_content)
         return [system, *history_msgs, trigger]
 
 

@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from annie.npc.prompts import render_identity
 from annie.npc.state import AgentState
 from annie.npc.sub_agents.memory_agent import MemoryAgent
 from annie.npc.tracing import EventType
@@ -52,14 +54,12 @@ class Reflector:
     def __call__(self, state: AgentState) -> dict:
         tracer = state.get("tracer")
         ctx = state.get("agent_context")
-        npc_name = ctx.npc_id if ctx is not None else "npc"
-        character_prompt = ctx.character_prompt if ctx is not None else ""
         results = state.get("execution_results", [])
         input_event = state.get("input_event", "")
 
         span = tracer.node_span("reflector") if tracer else _nullcontext()
         with span:
-            system_prompt = self._static_prompt + f"\n\n## NPC Identity\nName: {npc_name}\n{character_prompt}"
+            system_prompt = self._static_prompt + "\n\n" + render_identity(ctx)
 
             actions_summary = "\n".join(
                 f"- Task: {r['task_description']}\n  Action: {r['action']}" for r in results
@@ -87,7 +87,7 @@ class Reflector:
                 tracer.trace("reflector", EventType.MEMORY_WRITE, output_summary="stored reflection memory")
 
             for fact in facts:
-                self.memory_agent.store_semantic(fact, metadata={"category": "learned"})
+                self.memory_agent.store_semantic(fact)
             if facts and tracer:
                 tracer.trace(
                     "reflector", EventType.MEMORY_WRITE,
@@ -122,23 +122,60 @@ class Reflector:
                     facts_part, rel_part = rest.split("RELATIONSHIP_NOTES:", 1)
                 else:
                     facts_part, rel_part = rest, ""
-                try:
-                    facts = json.loads(facts_part.strip())
-                    if not isinstance(facts, list):
-                        facts = []
-                except (json.JSONDecodeError, ValueError):
-                    facts = []
-                if rel_part.strip():
-                    try:
-                        rel_notes = json.loads(rel_part.strip())
-                        if not isinstance(rel_notes, list):
-                            rel_notes = []
-                    except (json.JSONDecodeError, ValueError):
-                        rel_notes = []
+                facts = _parse_list(facts_part)
+                rel_notes = _parse_rel_notes(rel_part)
             else:
                 reflection = section.strip()
 
         return reflection, facts, rel_notes
+
+
+_BULLET_PREFIX_RE = re.compile(r"^\s*(?:[-*•]\s+|\d+[.)]\s+)")
+
+
+def _parse_list(raw: str) -> list[str]:
+    """Tolerant list parser: JSON array → bullet lines → []."""
+    text = raw.strip()
+    if not text:
+        return []
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, list):
+            return [str(x).strip() for x in parsed if str(x).strip()]
+    except (json.JSONDecodeError, ValueError):
+        pass
+    items: list[str] = []
+    for line in text.splitlines():
+        stripped = _BULLET_PREFIX_RE.sub("", line).strip()
+        if stripped:
+            items.append(stripped)
+    return items
+
+
+def _parse_rel_notes(raw: str) -> list[dict]:
+    """Tolerant parse for RELATIONSHIP_NOTES.
+
+    JSON list of dicts preferred; otherwise try JSON list of strings or bullet
+    list (each becomes ``{"person": "", "observation": item}`` — the empty
+    person makes them fall through Reflector's write guard).
+    """
+    text = raw.strip()
+    if not text:
+        return []
+    try:
+        parsed = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        parsed = None
+    if isinstance(parsed, list):
+        out: list[dict] = []
+        for item in parsed:
+            if isinstance(item, dict):
+                out.append(item)
+            else:
+                out.append({"person": "", "observation": str(item)})
+        return out
+    # Bullet fallback.
+    return [{"person": "", "observation": s} for s in _parse_list(text)]
 
 
 class _nullcontext:
