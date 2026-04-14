@@ -6,8 +6,6 @@ over the new native tool-use loop.
 
 from __future__ import annotations
 
-from typing import Any
-
 import chromadb
 import pytest
 from langchain_core.messages import AIMessage, BaseMessage

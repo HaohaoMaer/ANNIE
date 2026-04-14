@@ -273,7 +273,7 @@ class ContextCompressor:
                 SystemMessage(content="你是一个专业的对话摘要助手。"),
                 HumanMessage(content=prompt),
             ])
-            return response.content.strip()
+            return str(response.content).strip()
         except Exception as exc:
             logger.warning("ContextCompressor._llm_summarize failed: %s", exc)
             return None

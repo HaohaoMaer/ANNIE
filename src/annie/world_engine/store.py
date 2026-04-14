@@ -90,7 +90,7 @@ class MemoryStore:
         if not all_docs["ids"]:
             return 0
         pairs: list[tuple[str, datetime]] = []
-        for doc_id, meta in zip(all_docs["ids"], all_docs["metadatas"]):
+        for doc_id, meta in zip(all_docs["ids"], all_docs["metadatas"] or []):  # type: ignore[arg-type]
             ts_str = str(meta.get("created_at", "2000-01-01T00:00:00+00:00"))
             try:
                 ts = datetime.fromisoformat(ts_str)
@@ -121,7 +121,7 @@ class MemoryStore:
             n_results=n,
             where=where,
         )
-        return self._parse_results(results)
+        return self._parse_results(dict(results))
 
     def grep_entries(
         self,
@@ -144,7 +144,7 @@ class MemoryStore:
         results = self._collection.get(**kwargs)
         needle = pattern.casefold()
         hits: list[tuple[MemoryEntry, str]] = []
-        for doc, meta in zip(results["documents"], results["metadatas"]):
+        for doc, meta in zip(results["documents"] or [], results["metadatas"] or []):  # type: ignore[arg-type]
             if needle not in str(doc).casefold():
                 continue
             ts = str(meta.get("created_at", "")) if meta else ""
@@ -166,7 +166,7 @@ class MemoryStore:
             include=["documents", "metadatas"],
         )
         out: list[MemoryEntry] = []
-        for doc, meta in zip(results["documents"], results["metadatas"]):
+        for doc, meta in zip(results["documents"] or [], results["metadatas"] or []):  # type: ignore[arg-type]
             out.append(
                 MemoryEntry(
                     content=doc,

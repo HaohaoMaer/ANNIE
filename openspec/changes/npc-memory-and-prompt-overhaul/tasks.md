@@ -83,7 +83,7 @@
   - Planner skip-first 策略
   - 五个 memory category 的官方含义
 - [x] 7.2 更新 `src/annie/npc/__init__.py` 导出（若 `render_identity` 或新字段需要）
-- [ ] 7.3 `pyright src/annie/npc src/annie/world_engine` 0 error
+- [x] 7.3 `pyright src/annie/npc src/annie/world_engine` 0 error
 - [x] 7.4 `ruff check` 通过
 - [ ] 7.5 归档：`npx openspec archive` — 留待用户确认
 

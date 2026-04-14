@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from typing import Any
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -74,7 +75,7 @@ class Reflector:
 
             messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_content)]
             response = self.llm.invoke(messages)
-            raw = response.content
+            raw = _as_text(response.content)
 
             if tracer:
                 tracer.trace("reflector", EventType.LLM_RESPONSE, output_summary=raw[:100])
@@ -128,6 +129,12 @@ class Reflector:
                 reflection = section.strip()
 
         return reflection, facts, rel_notes
+
+
+def _as_text(content: Any) -> str:
+    if isinstance(content, list):
+        return "".join(str(p) for p in content)
+    return str(content) if content is not None else ""
 
 
 _BULLET_PREFIX_RE = re.compile(r"^\s*(?:[-*•]\s+|\d+[.)]\s+)")

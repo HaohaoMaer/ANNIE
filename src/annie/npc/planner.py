@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import Any
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -61,7 +62,7 @@ class Planner:
     def __call__(self, state: AgentState) -> dict:
         tracer = state.get("tracer")
         ctx = state.get("agent_context")
-        input_event = state["input_event"]
+        input_event = state.get("input_event", "")
         working_memory = state.get("working_memory", "")
         retry_count = state.get("retry_count", 0)
         loop_reason = state.get("loop_reason", "")
@@ -90,7 +91,7 @@ class Planner:
                 tracer.trace("planner", EventType.LLM_CALL, input_summary=input_event[:100])
 
             response = self.llm.invoke(messages)
-            raw_text = response.content
+            raw_text = _as_text(response.content)
 
             if tracer:
                 tracer.trace("planner", EventType.LLM_RESPONSE, output_summary=raw_text[:100])
@@ -129,6 +130,12 @@ class Planner:
                 status=TaskStatus.PENDING,
             ))
         return tasks
+
+
+def _as_text(content: Any) -> str:
+    if isinstance(content, list):
+        return "".join(str(p) for p in content)
+    return str(content) if content is not None else ""
 
 
 class _nullcontext:
