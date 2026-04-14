@@ -2,7 +2,7 @@
 
 本次 change 对 npc-agent capability 的修订。
 
-## MODIFIED Requirements
+## ADDED Requirements
 
 ### Requirement: Executor 构造的 system prompt 必须暴露 memory category 目录与预检索结果
 
