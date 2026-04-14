@@ -1,109 +1,246 @@
-"""Executor — Phase 1 cleanup.
+"""Executor — native tool-use loop over AgentContext.
 
-social_graph / cognitive dependencies removed. Full ToolDef-aware rewrite
-lands in Phase 3 (see openspec/changes/decouple-npc-world-engine/tasks.md).
+For each planned task, assembles an initial message list (XML-sectioned
+SystemMessage + rolling history turns + current task), then runs:
+
+    while True:
+        ContextBudget.check(messages, llm)        # Emergency fold if needed
+        ai = llm.bind_tools(tools).invoke(messages)
+        messages.append(ai)
+        if not ai.tool_calls: break               # final answer
+        for call in ai.tool_calls:
+            result = ToolAgent.dispatch(call, ctx)   # Micro-compressed
+            messages.append(ToolMessage(result, tool_call_id=call.id))
+
+Skills are frozen in this change (see D7); the <available_skills/> XML
+section is emitted as a placeholder with no names.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+import re
+from typing import TYPE_CHECKING, Any
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 
-from annie.npc.state import AgentState, TaskStatus
-from annie.npc.sub_agents.memory_agent import MemoryAgent
+from annie.npc.state import AgentState, Task, TaskStatus
 from annie.npc.tracing import EventType
 
 if TYPE_CHECKING:
-    from annie.npc.sub_agents.skill_agent import SkillAgent
     from annie.npc.sub_agents.tool_agent import ToolAgent
 
 logger = logging.getLogger(__name__)
 
-EXECUTOR_SYSTEM_PROMPT = """\
-You are the execution module for an NPC named {name}.
+MAX_TOOL_LOOPS: int = 8
 
+EXECUTOR_SYSTEM_TEMPLATE = """\
+<character>
 {character_prompt}
+</character>
+<world_rules>
+{world_rules}
+</world_rules>
+<situation>
+{situation}
+</situation>
+<available_skills>
+{skills}
+</available_skills>
 
-You are given a task to carry out. Use the provided memory context to inform
-your actions. Respond with a concise description of what the NPC does, says,
-or decides. Stay in character.
+You are acting as this NPC. Respond in-character. You may call tools
+(e.g. memory_recall, memory_store, inner_monologue) to ground your answer;
+when you have everything you need, produce a final in-character reply with
+no further tool calls.
 """
 
 
 class Executor:
-    """Processes tasks one by one, querying memory and optionally invoking skills and tools."""
-
     def __init__(
         self,
         llm: BaseChatModel,
-        memory_agent: MemoryAgent,
-        skill_agent: SkillAgent | None = None,
-        tool_agent: ToolAgent | None = None,
+        tool_agent: "ToolAgent",
+        max_loops: int = MAX_TOOL_LOOPS,
     ):
         self.llm = llm
-        self.memory_agent = memory_agent
-        self.skill_agent = skill_agent
         self.tool_agent = tool_agent
+        self.max_loops = max_loops
 
+    # ------------------------------------------------------------------
     def __call__(self, state: AgentState) -> dict:
         tracer = state.get("tracer")
         ctx = state.get("agent_context")
-        npc_name = ctx.npc_id if ctx is not None else "npc"
-        character_prompt = ctx.character_prompt if ctx is not None else ""
         tasks = state.get("tasks", [])
+        budget = state.get("context_budget")
 
         span = tracer.node_span("executor") if tracer else _nullcontext()
         with span:
-            system_prompt = EXECUTOR_SYSTEM_PROMPT.format(
-                name=npc_name, character_prompt=character_prompt,
-            )
-
-            results = []
-            updated_tasks = []
+            all_messages: list[BaseMessage] = []
+            results: list[dict[str, Any]] = []
+            updated_tasks: list[Task] = []
 
             for task in tasks:
                 task.status = TaskStatus.IN_PROGRESS
-
-                if tracer:
-                    tracer.trace("executor", EventType.MEMORY_READ, input_summary=task.description[:80])
-                memory_context = self.memory_agent.build_context(task.description)
-
-                skill_output = None
-                if self.skill_agent:
-                    skill_output = self.skill_agent.try_skill(task.description, npc_name, tracer)
-
-                tool_output = None
-                if self.tool_agent:
-                    tool_output = self.tool_agent.try_tool(task.description, npc_name, tracer)
-
-                user_content = f"Task: {task.description}\n\nMemory context:\n{memory_context}"
-                if skill_output:
-                    user_content += f"\n\nSkill output:\n{skill_output}"
-                if tool_output:
-                    user_content += f"\n\nTool output:\n{tool_output}"
-
-                if tracer:
-                    tracer.trace("executor", EventType.LLM_CALL, input_summary=task.description[:80])
-
-                messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_content)]
-                response = self.llm.invoke(messages)
-
-                if tracer:
-                    tracer.trace("executor", EventType.LLM_RESPONSE, output_summary=response.content[:100])
+                messages = self._initial_messages(ctx, task)
+                final_ai = self._run_loop(messages, ctx, budget, tracer)
 
                 task.status = TaskStatus.DONE
-                task.result = response.content
+                content = _to_text(final_ai.content) if final_ai is not None else ""
+                task.result = content
                 updated_tasks.append(task)
                 results.append({
                     "task_id": task.id,
                     "task_description": task.description,
-                    "action": response.content,
+                    "action": content,
                 })
+                all_messages.extend(messages)
 
-        return {"tasks": updated_tasks, "execution_results": results}
+        return {
+            "tasks": updated_tasks,
+            "execution_results": results,
+            "messages": all_messages,
+        }
+
+    # ---- loop internals ------------------------------------------------
+    def _run_loop(
+        self,
+        messages: list[BaseMessage],
+        ctx: Any,
+        budget: Any,
+        tracer: Any,
+    ) -> AIMessage | None:
+        tool_registry = self.tool_agent.tool_registry
+        tool_defs = [tool_registry.get(n) for n in tool_registry.list_tools()]
+        tool_defs = [t for t in tool_defs if t is not None]
+        tool_schemas = [_tool_to_schema(t) for t in tool_defs]
+
+        try:
+            llm = self.llm.bind_tools(tool_schemas) if tool_schemas else self.llm  # type: ignore[attr-defined]
+        except (NotImplementedError, AttributeError):
+            llm = self.llm  # StubLLM / models without bind_tools
+
+        last_ai: AIMessage | None = None
+        for step in range(self.max_loops):
+            if budget is not None:
+                messages[:] = budget.check(messages, self.llm)
+
+            if tracer:
+                tracer.trace(
+                    "executor", EventType.LLM_CALL,
+                    input_summary=f"loop step {step}, {len(messages)} msgs",
+                )
+            response = llm.invoke(messages)
+            if not isinstance(response, AIMessage):
+                response = AIMessage(content=_to_text(getattr(response, "content", response)))
+            messages.append(response)
+            last_ai = response
+
+            if tracer:
+                tracer.trace(
+                    "executor", EventType.LLM_RESPONSE,
+                    output_summary=_to_text(response.content)[:100],
+                )
+
+            tool_calls = getattr(response, "tool_calls", None) or []
+            if not tool_calls:
+                return response
+
+            for call in tool_calls:
+                name = call.get("name", "")
+                call_id = call.get("id") or f"call_{step}_{name}"
+                if tracer:
+                    tracer.trace(
+                        "executor", EventType.TOOL_INVOKE,
+                        output_summary=f"tool={name}", metadata={"tool": name},
+                    )
+                result = self.tool_agent.dispatch(call, ctx)
+                messages.append(ToolMessage(content=result, tool_call_id=call_id))
+
+        logger.warning("Executor: hit MAX_TOOL_LOOPS=%d without a final answer", self.max_loops)
+        return last_ai
+
+    # ---- message assembly ----------------------------------------------
+    def _initial_messages(self, ctx: Any, task: Task) -> list[BaseMessage]:
+        character_prompt = getattr(ctx, "character_prompt", "") or ""
+        world_rules = getattr(ctx, "world_rules", "") or ""
+        situation = getattr(ctx, "situation", "") or ""
+        history = getattr(ctx, "history", "") or ""
+        input_event = getattr(ctx, "input_event", "") or ""
+        npc_id = getattr(ctx, "npc_id", "") or ""
+
+        system = SystemMessage(content=EXECUTOR_SYSTEM_TEMPLATE.format(
+            character_prompt=character_prompt,
+            world_rules=world_rules,
+            situation=situation,
+            skills="(none this run)",
+        ))
+
+        history_msgs = _history_to_messages(history, npc_id)
+
+        trigger = HumanMessage(content=(
+            f"<input_event>{input_event}</input_event>\n"
+            f"<task>{task.description}</task>"
+        ))
+        return [system, *history_msgs, trigger]
+
+
+# ----------------------------------------------------------------------
+def _to_text(content: Any) -> str:
+    if isinstance(content, list):
+        return "".join(str(p) for p in content)
+    return str(content) if content is not None else ""
+
+
+def _tool_to_schema(tool: Any) -> dict:
+    """Render a ToolDef as an OpenAI-function-style schema dict for bind_tools."""
+    params = tool.input_schema.model_json_schema() if tool.input_schema else {
+        "type": "object", "properties": {},
+    }
+    return {
+        "type": "function",
+        "function": {
+            "name": tool.name,
+            "description": tool.description,
+            "parameters": params,
+        },
+    }
+
+
+_HISTORY_LINE_RE = re.compile(r"^(\[folded\])?\[(?P<speaker>[^\]]+)\] (?P<content>.*)$")
+
+
+def _history_to_messages(history: str, self_id: str) -> list[BaseMessage]:
+    """Parse the engine-rendered rolling history into a message sequence.
+
+    The DefaultWorldEngine formats each entry as ``[speaker] content`` (with an
+    optional ``[folded]`` prefix). Entries whose speaker equals the NPC's own
+    ``npc_id`` become AIMessage; everything else becomes HumanMessage.
+    """
+    if not history.strip():
+        return []
+    msgs: list[BaseMessage] = []
+    for raw in history.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        m = _HISTORY_LINE_RE.match(line)
+        if not m:
+            msgs.append(HumanMessage(content=line))
+            continue
+        speaker = m.group("speaker")
+        content = m.group("content")
+        if speaker == self_id:
+            msgs.append(AIMessage(content=content))
+        else:
+            msgs.append(HumanMessage(content=f"{speaker}: {content}"))
+    return msgs
 
 
 class _nullcontext:

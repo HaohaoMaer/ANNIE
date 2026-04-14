@@ -41,3 +41,16 @@ class AgentContext(BaseModel):
 
     # ---- Open extension ------------------------------------------------
     extra: dict[str, Any] = Field(default_factory=dict)
+
+
+def _rebuild() -> None:
+    # Resolve forward refs to ToolDef / SkillDef / MemoryInterface.
+    from annie.npc.memory.interface import MemoryInterface  # noqa: F401
+    from annie.npc.skills.base_skill import SkillDef  # noqa: F401
+    from annie.npc.tools.base_tool import ToolContext, ToolDef  # noqa: F401
+
+    AgentContext.model_rebuild()
+    ToolContext.model_rebuild(_types_namespace={"AgentContext": AgentContext})
+
+
+_rebuild()

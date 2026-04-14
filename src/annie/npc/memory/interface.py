@@ -4,9 +4,9 @@ The NPC Agent layer must never ``import chromadb`` or touch concrete memory
 classes. All long-term recall/remember operations go through this protocol,
 implemented by the world-engine layer (default: ChromaDB-backed).
 
-Type is an open string — world engines may register any types they like.
-Recommended common values are exported as module-level constants but are
-**not** an enum: the interface does not restrict the value set.
+``category`` is an open string — world engines may register any categories
+they like. Conventional values are exported as module-level constants but
+are **not** an enum.
 """
 
 from __future__ import annotations
@@ -15,17 +15,18 @@ from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
 
-# --- Conventional type strings (non-exhaustive; not an enum) ---------------
-MEMORY_TYPE_SEMANTIC = "semantic"
-MEMORY_TYPE_REFLECTION = "reflection"
-MEMORY_TYPE_RELATIONSHIP = "relationship"
+# --- Conventional category strings (non-exhaustive; not an enum) -----------
+MEMORY_CATEGORY_EPISODIC = "episodic"
+MEMORY_CATEGORY_SEMANTIC = "semantic"
+MEMORY_CATEGORY_REFLECTION = "reflection"
+MEMORY_CATEGORY_IMPRESSION = "impression"
 
 
 class MemoryRecord(BaseModel):
     """Neutral record shape returned by ``recall``."""
 
     content: str
-    type: str = MEMORY_TYPE_SEMANTIC
+    category: str = MEMORY_CATEGORY_SEMANTIC
     metadata: dict[str, Any] = Field(default_factory=dict)
     relevance_score: float = 0.0
 
@@ -37,19 +38,19 @@ class MemoryInterface(Protocol):
     def recall(
         self,
         query: str,
-        type: str | None = None,
+        categories: list[str] | None = None,
         k: int = 5,
     ) -> list[MemoryRecord]:
-        """Retrieve up to *k* relevant records, optionally filtered by type."""
+        """Retrieve up to *k* relevant records, optionally filtered by category list."""
         ...
 
     def remember(
         self,
         content: str,
-        type: str = MEMORY_TYPE_SEMANTIC,
+        category: str = MEMORY_CATEGORY_SEMANTIC,
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        """Persist a single record under the given type."""
+        """Persist a single record under the given category."""
         ...
 
     def build_context(self, query: str) -> str:

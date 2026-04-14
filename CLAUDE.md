@@ -2,225 +2,94 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Project
+## Repository status
 
-ANNIE is a **LangGraph-based multi-agent narrative simulation engine** for generating intelligent NPCs with persistent memory, dynamic social relationships, and autonomous behavior. It is a simulation engine — not a chatbot.
+ANNIE is mid-refactor. The repo was an end-to-end "Midnight Train" murder-mystery demo built on top of a `social_graph` + `cognitive` layer; that layer has been deleted. The current architecture is a two-layer, decoupled split — see *Architecture* below. The old demo (`scripts/run_midnight_train_demo.py`, `午夜列车/`, `web/`) is **not expected to run** until a follow-up change restores it on the new architecture.
 
-## Commands
+Source of truth for the refactor: `openspec/specs/` (synced capability specs) and `openspec/changes/archive/2026-04-12-decouple-npc-world-engine/`.
+
+## Common commands
 
 ```bash
-# Install (editable)
+# Install (editable + dev extras)
 pip install -e ".[dev]"
 
-# Run tests
-pytest
+# Test
+pytest                                                # full suite (old suite largely broken)
+pytest tests/test_integration/test_decoupled_flow.py  # the one suite that exercises the new architecture end-to-end
+pytest -k test_name                                   # single test
+pytest -m "not integration"                           # skip tests that need an external LLM
 
-# Run a single test file
-pytest tests/test_npc/test_agent.py
+# Lint / type-check
+ruff check src/annie/npc src/annie/world_engine
+npx pyright src/annie/npc src/annie/world_engine      # expect 0 errors on refactored code; chromadb SDK stubs emit noise
 
-# Lint
-ruff check src/
-ruff format src/
+# OpenSpec workflow (spec-driven changes under openspec/changes/<name>/)
+npx openspec list --json
+npx openspec status --change "<name>" --json
+npx openspec instructions apply --change "<name>" --json
 ```
+
+ChromaDB writes a local vector store to `./data/vector_store/` by default; tests should always pass their own `chromadb.PersistentClient(path=tmp_path)` to avoid polluting it.
 
 ## Architecture
 
-Three decoupled layers:
+Two layers, strict separation. This separation is the whole point of the refactor — it is enforced by the specs in `openspec/specs/` and must not drift.
 
-### Layer 1: NPC Agent Layer (`src/annie/npc/`)
-Each NPC is a complete, independent Agent system built on LangGraph. Everything an NPC needs is contained within this layer.
+### NPC Agent layer — `src/annie/npc/`
 
-**Core workflow** — three LangGraph nodes:
-- **Planner** → decomposes incoming events into tasks
-- **Executor** → invokes sub-agents and tools to act
-- **Reflector** → updates memory after execution
+A stateless, business-agnostic AI framework. **Must not** import `chromadb`, hold world state, or contain any business vocabulary (no "剧本", "线索", "沙盒", no `EmotionalState` / `BeliefSystem` / `SocialGraph`).
 
-**Sub-agents** (`npc/sub_agents/`) — invoked by the Executor as needed: `MemoryAgent`, `SocialAgent`, `SkillAgent`, `ToolAgent`.
+- `agent.py` — `NPCAgent(llm)`. One instance can drive any number of NPCs; all per-NPC data enters through `AgentContext` on each `run()` call and leaves as `AgentResponse`. Internally compiles a LangGraph: **Planner → Executor → Reflector**, with a retry edge from Executor back to Planner when the Executor produces no results.
+- `context.py` / `response.py` — the *only* input and output channels. `AgentContext` is three-tier: strong-typed core (`npc_id`, `input_event`, `tools`, `skills`, `memory`), prompt text (`character_prompt`, `world_rules`, `situation`, `history`), and open `extra: dict`. `AgentContext.model_rebuild()` runs at import time to resolve forward refs.
+- `memory/interface.py` — the `MemoryInterface` **Protocol** (`recall(query, categories)` / `remember(content, category)` / `build_context`). `category` is an open string, not an enum. Conventional values: `episodic`, `semantic`, `reflection`, `impression`.
+- `tools/base_tool.py` — `ToolDef` ABC + `ToolContext`. `ToolContext.agent_context` gives tools access to `memory` and `extra` at call time (never via ctor injection).
+- `tools/builtin.py` — built-in tools always registered: `memory_recall` (categories filter), `memory_store`, `inner_monologue`.
+- `tools/tool_registry.py` — merges built-ins with `AgentContext.tools`. **Conflict policy: built-in wins with a warning log.**
+- `context_budget.py` — `ContextBudget` runs inside the Executor's tool-use loop and **Emergency-folds** the earliest tool rounds into a summary SystemMessage when messages approach the model context limit.
+- `executor.py` — native **tool-use loop**: builds XML-sectioned SystemMessage + rolling history turns + current task, runs `llm.bind_tools(all_tools).invoke(messages)` until no tool_calls (or `MAX_TOOL_LOOPS=8`). Dispatches tool_calls via `ToolAgent.dispatch` which **Micro-compresses** outputs >2000 chars.
+- `skills/base_skill.py` — `SkillDef` / `SkillRegistry` kept for future reuse. **Currently frozen**: `SkillAgent.try_activate` always returns `None` + DeprecationWarning.
+- `sub_agents/` — `MemoryAgent` (thin `MemoryInterface` adapter), `ToolAgent` (native tool_call dispatcher + Micro compression), `SkillAgent` (frozen).
+- `tracing.py` — `Tracer` accumulates `TraceEvent`s through the run; nodes wrap work in `tracer.node_span(...)` and emit `tracer.trace(node, EventType, ...)`.
 
-**Memory system** (`npc/memory/`) — three memory types per NPC:
-- `EpisodicMemory` — timestamped events
-- `SemanticMemory` — world knowledge and facts
-- `RelationshipMemory` — subjective perception of others (derived from Social Graph)
+Key invariant: **anything per-NPC flows through `AgentContext`, not through `NPCAgent.__init__`.** If you find yourself adding state to `self`, reconsider.
 
-Long-term memory backed by ChromaDB. **In the demo/WorldEngineAgent context, always use `EphemeralClient` (passed via `chroma_client=`) to avoid cross-game memory pollution.** Context is passed as compressed summaries, not raw history.
+### World Engine layer — `src/annie/world_engine/`
 
-**Skill system** (`npc/skills/`, `data/skills/`) — skills are loaded on demand to avoid context overload. Each skill lives in `data/skills/<skill_name>/` with three files: `description.md`, `script.py`, `prompt.j2`.
+Owns all business complexity: world state, memory backends, business tools, skills, action arbitration, scene progression. Every concrete engine (scripted-murder, AI-GM, sandbox, …) subclasses `WorldEngine`.
 
-**Tools** (`npc/tools/`) — external APIs, file system, game interfaces.
+- `base.py` — `WorldEngine` ABC. Minimum contract: `build_context`, `handle_response`, `memory_for`; optional `history_for(npc_id) -> HistoryStore`, `compressor_for(npc_id) -> Compressor`, `step()`.
+- `memory.py` — `DefaultMemoryInterface`: single per-NPC ChromaDB collection (`npc_memory_{npc_id}`) with `category` metadata. `impression` hits get a 1.2× relevance boost.
+- `store.py` / `chroma_lock.py` — ChromaDB primitives. **Only this layer imports `chromadb`.** Uses `from chromadb.api import ClientAPI`.
+- `history.py` — `HistoryStore`: per-NPC JSONL rolling dialogue/event history at `./data/history/{npc_id}.jsonl`; supports `append` / `read_last` / `estimate_tokens` / `replace` (used by the Compressor).
+- `compressor.py` — `Compressor.maybe_fold()`: when history tokens > 3000, the oldest contiguous unfolded slice (~1500 tokens) is LLM-summarised; the slice is replaced in `HistoryStore` by a single `is_folded=True` entry **and** the summary is also stored as `category="impression"` in long-term memory. Recursive folds are refused (already-folded entries are excluded from candidate selection).
+- `default_engine.py` — `DefaultWorldEngine`: owns per-NPC `DefaultMemoryInterface`, `HistoryStore`, and optional `Compressor` (needs an LLM). `build_context` renders the last 20 history turns; `handle_response` appends dialogue + writes `episodic` memory + calls `compressor.maybe_fold`.
 
-### Layer 2: Social Graph Layer (`src/annie/social_graph/`)
-**Global truth** for all inter-NPC relationships. NPCs query this layer — they never own relationship state directly.
-- `SocialGraph` — nodes (NPCs) + edges (type, intensity 0–1, status)
-- `SocialEventLog` — append-only event sourcing (Actor → Target → Action)
-- `PropagationEngine` — gossip propagation with trust filtering and time delay
+### Data flow for one run
 
-### Layer 3: World Engine Layer (`src/annie/world_engine/`)
-Acts as the world "Director":
-- `TimeSystem` — tick-based clock, day/night cycles
-- `EventScheduler` — timed events, conditional triggers, NPC action queue
-- `SceneManager` — locations, environment state, NPC positions
-- `NarrativeController` — injects conflicts, controls pacing, triggers key events
+```
+WorldEngine.build_context(npc_id, event) → AgentContext
+                        │
+                        ▼
+NPCAgent.run(ctx):
+  Planner        — may emit tasks OR `{"skip": true}`; if skip, Executor synthesizes a single task from the event
+  Executor       — per task: build messages (XML system + history turns + task) → while True: ContextBudget.check → llm.bind_tools(all).invoke → if no tool_calls: done; else ToolAgent.dispatch each and append ToolMessage
+  retry edge     — if no execution_results and retry_count < max_retries, back to Planner
+  Reflector      — parses REFLECTION/FACTS/RELATIONSHIP_NOTES; writes via MemoryAgent.store_reflection / store_semantic (RELATIONSHIP_NOTES merged into reflection category with `person` metadata)
+                        │
+                        ▼
+                   AgentResponse → WorldEngine.handle_response
+```
 
-### Configuration (`config/model_config.yaml`)
-Model provider, embedding model, memory backend, and world tick settings. Do not hardcode model names in source — always read from config.
+## Conventions worth knowing
 
-## Key Design Constraints
-- NPCs **perceive** the world; they do not own it. World state lives in World Engine and Social Graph.
-- Social relationships are **externalized** — the Social Graph is the single source of truth.
-- NPC initialization uses structured YAML character definitions (`data/npcs/`), not single prompts.
-- Context is **compressed and persisted** between ticks — never kept raw in the prompt.
+- **Never revive legacy**. Deleted: `cognitive/`, `social_graph/`, `perception.py`, `memory/relationship.py`, old `BaseTool`, old Jinja-driven `BaseSkill`. If something references these names, it's dead code.
+- **Memory lives in the world engine.** If you need to touch episodic/semantic storage, edit `src/annie/world_engine/`. The NPC layer only knows `MemoryInterface`.
+- **Skills are not tools.** They never appear in `AgentContext.tools` and are never emitted as `tool_call` names. Wrong mental model = architectural violation.
+- **`NPCProfile` is slim.** It is a carrier for `name`, `personality`, `background`, `goals`, `memory_seed`, `skills`, `tools`. YAML loading (`load_npc_profile`) is called from the world engine, never the NPC layer.
+- **OpenSpec governs big refactors.** New architectural change → new `openspec/changes/<name>/` directory with `proposal.md`, `design.md`, `tasks.md`, `specs/<capability>/spec.md`. Work the tasks in order, archive with `npx openspec archive` (or `/opsx:archive`) when done.
 
-## Implementation Progress
+## Testing notes
 
-### Phase 1 (MVP) — Completed
-Single NPC with full LangGraph agent workflow, two-tier skill/tool system, and all four sub-agents. 165 unit tests passing.
-
-**Implemented modules (`src/annie/npc/`):**
-- `agent.py` — `NPCAgent`: top-level orchestrator, builds `StateGraph(START → planner → executor → reflector → END)`, wires SkillRegistry, ToolRegistry, and all sub-agents, exposes `run(event) -> AgentRunResult`
-- `config.py` — `ModelConfig` + `load_model_config()`: reads `config/model_config.yaml`, resolves API key from env
-- `state.py` — `NPCProfile` (with `skills`/`tools` fields), `Task`, `AgentState(TypedDict)`, `load_npc_profile()`: shared data types for all components
-- `tracing.py` — `Tracer`, `TraceEvent`, `EventType` (includes `TOOL_INVOKE`), `TraceFormatter`: structured execution tracing with `node_span()` context manager, console/JSON output
-- `llm.py` — `create_chat_model()`, `create_embeddings()`: thin factory using `ChatOpenAI` (DeepSeek-compatible) and `HuggingFaceEmbeddings`
-- `planner.py` — `Planner`: prompts LLM to decompose events into `Task` list (JSON parsing with markdown code block handling)
-- `executor.py` — `Executor`: iterates tasks, queries `MemoryAgent` for context, invokes `SkillAgent` and `ToolAgent`, generates actions via LLM
-- `reflector.py` — `Reflector`: generates reflection from execution results, stores episodic + semantic memories
-- `memory/episodic.py` — `EpisodicMemory`: ChromaDB-backed timestamped event storage with similarity search
-- `memory/semantic.py` — `SemanticMemory`: ChromaDB-backed fact storage with category filtering
-- `memory/relationship.py` — `RelationshipMemory`: Phase 1 in-memory dict or Phase 2 delegates to PerceptionBuilder when `perception_builder` param is set
-- `skills/base_skill.py` — `BaseSkill` + `SkillRegistry`: two-tier loading (base skills from `data/skills/base/` always loaded, personalized skills from `data/skills/personalized/` loaded per NPC YAML `skills` field)
-- `tools/base_tool.py` — `BaseTool(ABC)`: abstract interface for all NPC tools
-- `tools/tool_registry.py` — `ToolRegistry`: programmatic base + personalized tool registration
-- `tools/perception.py` — `PerceptionTool`: heuristic entity/environment/threat parser (base tool)
-- `tools/memory_query.py` — `MemoryQueryTool`: wraps MemoryAgent for targeted queries (base tool, dependency injected via `set_memory_agent()`)
-- `sub_agents/memory_agent.py` — `MemoryAgent`: aggregates episodic/semantic/relationship into unified context string
-- `sub_agents/skill_agent.py` — `SkillAgent`: selects and invokes skills via improved keyword matching (stop-word filtering)
-- `sub_agents/tool_agent.py` — `ToolAgent`: selects and invokes tools via keyword matching
-- `sub_agents/social_agent.py` — `SocialAgent`: Phase 1 wraps RelationshipMemory; Phase 2 delegates to PerceptionBuilder for full social context with events + belief status
-
-**Skill/Tool architecture:**
-- **Base skills** (`data/skills/base/`): conversation, observation, reasoning — loaded for every NPC
-- **Personalized skills** (`data/skills/personalized/`): negotiation, storytelling — loaded per NPC YAML
-- **Base tools**: PerceptionTool, MemoryQueryTool — registered for every NPC
-- **Personalized tools**: extensible via `_PERSONALIZED_TOOL_CLASSES` mapping in `tool_registry.py`
-
-**Data files:**
-- `data/npcs/village_elder.yaml` — full NPC definition with personality, background, goals, relationships, memory seeds, skills (negotiation, storytelling)
-- `data/npcs/example_npc.yaml` — minimal NPC for testing
-- `data/skills/base/` — conversation, observation, reasoning skills
-- `data/skills/personalized/` — negotiation, storytelling skills
-- `data/skills/example_skill/` — template skill for reference/testing
-
-**Demo:** `python scripts/run_demo.py` — runs Village Elder through 3 events with colored trace output
-
-**Key technical decisions:**
-- ChromaDB collection names are sanitized via `_sanitize_collection_name()` (spaces/special chars → underscores)
-- `AgentState.tracer` typed as `Any` to avoid circular import issues with LangGraph's runtime `get_type_hints()`
-- Tracing uses explicit `Tracer` object (not LangGraph callbacks) for domain-aware, version-stable events
-- Tests use `chromadb.EphemeralClient()` with unique collection names per test to avoid cross-test pollution
-- Skills are file-based (description.md/script.py/prompt.j2), tools are class-based (ABC with programmatic registration)
-- SkillRegistry falls back to flat-directory loading when `base/` subdir is absent (backward compat)
-
-### Phase 2 (Multi-NPC + Social Graph) — Completed
-Multiple NPCs with information asymmetry via Social Graph layer. 121 new tests (286 total passing).
-
-**Social Graph layer (`src/annie/social_graph/`):**
-- `models.py` — `RelationshipEdge` (multi-dimensional: trust/familiarity/emotional_valence/intensity/status), `SocialEvent` (with `EventVisibility`: PUBLIC/WITNESSED/PRIVATE/SECRET), `KnowledgeItem` (with `BeliefStatus`: ACCEPTED/SKEPTICAL/DOUBTED/REJECTED + credibility score + conflicting_with), `GraphDelta`
-- `graph.py` — `SocialGraph`: NetworkX DiGraph storing god's-eye truth. CRUD for nodes/edges, `apply_deltas()` with clamping, knowledge tracking. No subjective transformation.
-- `event_log.py` — `SocialEventLog`: append-only event store with query by actor/target/timerange/visibility
-- `propagation.py` — `PropagationEngine`: BFS information spreading with two semantic-filtering dimensions:
-  - Relationship-type willingness (trusted_ally=0.9 → enemy=0.1, hostile types add +0.3 distortion)
-  - Event visibility rules (PUBLIC→all, WITNESSED→BFS, PRIVATE→principals only, SECRET→gossip needs trust≥0.7)
-  - `propagate_event()`, `propagate_gossip()`, `tick()` methods. Personality dimension deferred to Phase 3.
-
-**Perception Pipeline (`src/annie/social_graph/perception/`) — three-stage debuggable pipeline:**
-- `knowledge_filter.py` — `KnowledgeFilter` (L1): "What does this NPC know?" Pure data filtering from graph's knowledge store.
-- `belief_evaluator.py` — `BeliefEvaluator` (L2): "Does the NPC believe it?" Source trust → credibility brackets, conflict detection (opposing sentiment keywords about same person), final belief_status assignment.
-- `perception_builder.py` — `PerceptionBuilder` (L3): "What's the NPC's worldview?" Assembles filtered+evaluated data into `EnrichedRelationshipDef` list + perceived events + `build_social_context()` string for NPC Agent.
-
-**NPC layer integration (backward-compatible, all new params default to None):**
-- `agent.py` — `NPCAgent` accepts optional `social_graph` and `event_log`; builds Perception Pipeline internally, seeds YAML relationships into SocialGraph
-- `executor.py` — `Executor` accepts optional `event_log`; auto-logs `SocialEvent` when actions mention other NPCs
-- `reflector.py` — `Reflector` accepts optional `social_graph`; parses `RELATIONSHIP_UPDATES` from LLM response and applies `GraphDelta`s
-- `state.py` — added `EnrichedRelationshipDef(RelationshipDef)` subclass with trust/familiarity/emotional_valence/status
-
-**New NPC definitions:**
-- `data/npcs/blacksmith_gareth.yaml` — bold/proud/direct/stubborn, rival with Carpenter
-- `data/npcs/merchant_lina.yaml` — shrewd/social/observant/cautious, information trader
-
-**Demo:** `python scripts/run_phase2_demo.py` — 3 NPCs with preset events, trigger event, per-NPC processing, god's-eye vs subjective view comparison
-
-**Key technical decisions:**
-- SocialGraph stores only objective truth; subjective transformation is entirely in Perception Pipeline
-- Perception Pipeline is split into 3 independent stages for debuggability (each stage has clear input/output, can be inspected independently)
-- Personality-based perception bias deferred to Phase 3 to keep Phase 2 scope focused on information asymmetry
-- All integration is opt-in via optional constructor params; Phase 1 code path unchanged when social_graph=None
-- Propagation uses deterministic rules (not LLM calls) for distortion — adds prefixes like "Reportedly, " / "Rumor has it that "
-
-### Phase 3 (剧本杀Demo — 午夜列车) — Completed
-Murder mystery demo using "午夜列车" commercial script. 286 tests passing.
-
-**剧本目录结构 (`午夜列车/`):**
-- `人物剧本/*.pdf` — 6 character PDFs (何侦探, 撒乘客, 林乘客, 白乘客, 董乘客, 鸥乘务)
-- `线索/*/` — 57 clue images (OCR via EasyOCR+PyTorch)
-- `背景.docx`, `游戏流程.docx`, `真相.pdf`
-
-**World Engine as Game Master (`src/annie/world_engine/`):**
-- `world_engine_agent.py` — `WorldEngineAgent`: reads all script files, LLM-summarizes each character PDF into structured JSON, generates game phases, initializes NPCs, runs game loop with phase control and vote counting
-  - `_read_character_scripts()` — OCR → fallback to standard PDF reader if content < 100 chars
-  - `_summarize_character_scripts()` — full script → LLM → JSON with identity/background/secrets/goals/murderer fields; validates completeness and retries
-  - `_extract_npc_profile()` — parses summary JSON directly into NPCProfile (skips extra LLM call)
-  - `build_npc_context()` — injects current-phase dialogue history so NPCs hear what others said
-  - `_find_real_murderer()` — scans `character_summaries` for `"murderer": true`
-  - `_announce_final_results()` — deterministic `Counter` vote tallying → compare vs real murderer → LLM narrates result
-  - `advance_phase()` — resets `TurnManager` on each phase transition
-  - Uses `chromadb.EphemeralClient()` shared across all NPCs for clean per-game memory
-- `game_master/game_master.py` — `should_advance_phase()` respects `_min_rounds_per_phase` (default 1)
-- `clue_manager.py` — tracks clue discovery by NPC and phase
-
-**Cognitive Layer (`src/annie/npc/cognitive/`) — now integrated:**
-- `motivation.py` — `MotivationEngine`: goal/event/relationship/script-driven motivations with intensity prioritization
-- `belief_system.py` — `BeliefSystem`: confidence-tracked beliefs with contradiction detection
-- `emotional_state.py` — `EmotionalStateManager`: keyword-based emotion updates (Chinese + English), decay, profile initialization
-- `decision_maker.py` — `DecisionMaker`: scores options by motivation(40%) + feasibility(30%) + emotional(20%) + belief(10%)
-- All four components instantiated in `NPCAgent.__init__()` and wired to `Executor`
-- `NPCAgent.run()` calls `emotional_state_manager.update_from_event()` and `motivation_engine.generate_motivations()` before each graph invocation
-
-**Executor updates (`src/annie/npc/executor.py`):**
-- Both `EXECUTOR_SYSTEM_PROMPT` and `VOTING_SYSTEM_PROMPT` are Chinese; non-voting prompt now includes `{script_summary}`, `{motivations}`, `{emotional_state}`
-- `VOTING_SYSTEM_PROMPT` includes `{voteable_names}` list to constrain vote targets
-- `set_script_summary()` method — sets summary independently of voting phase
-- Vote parsing: exact match → substring match → surname (first char) match
-- `_all_npc_names` back-propagated to all NPCs after `initialize_npcs()` completes
-
-**NPC output format (every turn):**
-- `【内心活动】` — private reasoning from script/secrets/motivations (not shown to others)
-- `【说的话】` — strategic public speech (may differ from inner thoughts)
-- `【投票】` — voting phase only; constrained to named NPC list
-
-**New tools (`src/annie/npc/tools/`):**
-- `pdf_reader.py` — text-based PDF extraction (pypdf)
-- `pdf_ocr.py` — OCR PDF extraction (EasyOCR + pdf2image/fitz fallbacks), lazy-loads reader
-- `docx_reader.py` — DOCX extraction, structured or plain text
-- `image_reader.py` — single image or batch folder OCR (EasyOCR)
-- `item_inspection.py` — inspect game-world items via injected item registry
-- `location_search.py` — search game-world locations via injected location registry
-
-**Script parsing (`src/annie/script_parser/`):**
-- `models.py` — `CharacterInfo`, `Phase`, `PlotPoint`, `ScriptedEvent`, `Clue`, `Ending`, `ParsedScript`
-- `pdf_parser.py` — `ScriptPDFParser`: section detection (背景/人物/剧本/线索/结局), character/personality/goals/secrets extraction via regex
-
-**Personalized skills (`data/skills/personalized/`):**
-- `interrogation/` — Chinese; target NPC + known info → focused questions + contradiction analysis
-- `deduction/` — Chinese; clues list → reasoning steps + conclusion + confidence score
-
-**Key technical decisions:**
-- `WorldEngineAgent` uses `chromadb.EphemeralClient()` — prevents cross-game memory leakage (stale votes/reflections from prior runs cause NPCs to act as if already in voting phase)
-- `GAME_MASTER_SYSTEM_PROMPT` used as `SystemMessage` for all WE LLM calls to maintain GM persona
-- NPC profile built directly from `_summarize_character_scripts()` JSON output — avoids a third LLM round-trip per character
-- `should_advance_phase()` uses round-based counting (`_min_rounds_per_phase`) rather than raw turn count
-- `dialogue_history` stored on `WorldEngineAgent` and injected into each NPC's context (last 12 entries from current phase)
-
-**Demo:** `python scripts/run_midnight_train_demo.py` — full pipeline: OCR → character summaries → profile validation → game phases → game loop → vote counting → truth reveal
-
-### Phase 4 — Not started
-Emergent storytelling + Narrative control.
+- `tests/test_integration/test_decoupled_flow.py` is the canonical end-to-end example — use it as a template. It stubs the LLM via a simple `_StubLLM` returning canned `AIMessage`s and passes a tmpdir `chromadb.PersistentClient` so the global vector store is not touched.
+- Older suites (`tests/test_npc/`, `tests/test_social_graph/`, `tests/test_world_engine/`) predate the refactor and are largely broken. Don't fix them piecemeal; they'll be replaced as specs stabilize.

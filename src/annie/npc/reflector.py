@@ -1,6 +1,6 @@
 """Reflector — Phase 1 cleanup.
 
-social_graph / belief_system coupling removed. Reflection writes go through
+Reflection writes go through
 MemoryInterface (wired in Phase 3).
 """
 
@@ -82,12 +82,12 @@ class Reflector:
             reflection, facts, rel_notes = self._parse_response(raw)
 
             episode = f"Event: {input_event}. Reflection: {reflection}"
-            self.memory_agent.store_episodic(episode)
+            self.memory_agent.store_reflection(episode)
             if tracer:
-                tracer.trace("reflector", EventType.MEMORY_WRITE, output_summary="stored episodic memory")
+                tracer.trace("reflector", EventType.MEMORY_WRITE, output_summary="stored reflection memory")
 
             for fact in facts:
-                self.memory_agent.store_semantic(fact, category="learned")
+                self.memory_agent.store_semantic(fact, metadata={"category": "learned"})
             if facts and tracer:
                 tracer.trace(
                     "reflector", EventType.MEMORY_WRITE,

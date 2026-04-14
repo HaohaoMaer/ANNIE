@@ -80,6 +80,9 @@ class AgentState(TypedDict, total=False):
     max_retries: int
     loop_reason: str
     react_steps: list[dict[str, Any]]
+    # Executor tool-use loop (per-run working memory)
+    messages: list[Any]  # list[BaseMessage]; Any to keep state module free of langchain import
+    context_budget: Any  # ContextBudget | None
 
 
 def load_npc_profile(path: str | Path) -> NPCProfile:

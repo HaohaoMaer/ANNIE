@@ -46,3 +46,8 @@ data/npcs/鸥乘务/
 node_modules/
 .next/
 tsconfig.tsbuildinfo
+
+# Claude Code internal sources (not part of project)
+tools/
+skills/
+.claude/

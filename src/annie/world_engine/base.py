@@ -12,6 +12,8 @@ from abc import ABC, abstractmethod
 from annie.npc.context import AgentContext
 from annie.npc.memory.interface import MemoryInterface
 from annie.npc.response import AgentResponse
+from annie.world_engine.compressor import Compressor
+from annie.world_engine.history import HistoryStore
 
 
 class WorldEngine(ABC):
@@ -30,6 +32,15 @@ class WorldEngine(ABC):
     @abstractmethod
     def memory_for(self, npc_id: str) -> MemoryInterface:
         """Return a per-NPC MemoryInterface scoped to this engine's backend."""
+
+    # ---- Rolling history / compression (optional) ---------------------
+    def history_for(self, npc_id: str) -> HistoryStore | None:
+        """Return a per-NPC HistoryStore, or None if this engine doesn't track history."""
+        return None
+
+    def compressor_for(self, npc_id: str) -> Compressor | None:
+        """Return a per-NPC Compressor, or None if this engine doesn't fold history."""
+        return None
 
     # ---- World progression --------------------------------------------
     def step(self) -> None:
