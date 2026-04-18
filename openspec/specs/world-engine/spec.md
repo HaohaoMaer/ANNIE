@@ -127,3 +127,109 @@ NPC Agent 的 AgentResponse 中包含行动意图（ActionRequest）。世界引
 - **THEN** 推进由主持人 Agent（另一个 LLM）动态决策
 - **WHEN** 世界引擎是沙盒引擎
 - **THEN** 推进基于物理/规则模拟，最小干预
+
+---
+
+### Requirement: HistoryStore 必须提供 prune 原语
+
+`HistoryStore.prune(keep_last: int | None = None, before_turn_id: int | None = None) -> int`
+负责按条数或按 turn_id 分界删除旧条目，返回删除条数。两参数互斥；同时指定必须抛错。
+
+淘汰策略由 WorldEngine 决定；HistoryStore 自身不感知"游戏时间"或"场景"等上层概念。
+
+#### Scenario: 按条数保留
+
+- **WHEN** 调用 `prune(keep_last=100)` 且当前有 250 条条目
+- **THEN** JSONL 只剩最新 100 条
+- **AND** 返回值 = 150
+
+#### Scenario: 按 turn_id 分界
+
+- **WHEN** 调用 `prune(before_turn_id=42)`
+- **THEN** `turn_id <= 42` 的条目被删除
+- **AND** 返回值 = 被删除条数
+
+#### Scenario: 两参数互斥
+
+- **WHEN** 同时指定 `keep_last` 与 `before_turn_id`
+- **THEN** HistoryStore 必须抛出参数错误
+
+---
+
+### Requirement: Compressor 必须使用游标模式折叠，不得修改 JSONL
+
+Compressor 维护 `last_folded_turn_id` 持久化游标；折叠范围始终是"游标之后"的未折叠对话段。折叠完成后：
+
+- 向 MemoryInterface 写一条 `impression` 摘要
+- 更新游标到本次折叠末尾的 turn_id
+- **不修改** HistoryStore 中的任何条目
+
+游标的持久化由 HistoryStore 侧的 metadata sidecar（或等价机制）支撑，跨进程恢复。
+
+#### Scenario: 折叠后 JSONL 不变
+
+- **WHEN** 触发 `Compressor.force_fold`
+- **THEN** JSONL 文件的条目数与内容均未改变
+- **AND** 向量库新增一条 `impression` 记录
+- **AND** `last_folded_turn_id` 推进到最新折叠结束位置
+
+#### Scenario: 折叠不会重折同一段
+
+- **WHEN** 连续两次 `maybe_fold` 且期间无新增对话
+- **THEN** 第二次返回 None（无新内容可折叠）
+
+#### Scenario: prune 后的游标仍然有效
+
+- **WHEN** `prune(before_turn_id=X)` 删除的范围已覆盖游标位置
+- **THEN** 下一次折叠从当前 JSONL 中最老的未折叠条目起算
+- **AND** 不抛错、不重复折叠
+
+---
+
+### Requirement: Compressor 必须屏蔽异常，不传播到 handle_response
+
+`Compressor.maybe_fold` 在任何 LLM 调用失败、存储异常、或 LLM 输出不合格的情况下，必须返回 `False` 而不得向上抛出。游标 `last_folded_turn_id` 不推进，下次 tick 自然重试。日志级别至少 `warning`。
+
+LLM 输出"不合格"定义（轻量启发式，不试图检测幻觉）：
+- 空串或纯空白
+- 命中明显拒绝模式（如 `"I cannot"`, `"I can't"`, `"As an AI"`, `"Sorry"` 开头）
+- 压缩比不足：`len(summary) >= len(raw) * 0.7`
+- 过短：`len(summary.strip()) < 20`
+
+此约束的目的是保证一个 NPC 的压缩失败不会崩掉整个世界 tick（尤其在并发多 NPC 响应同一事件时）。
+
+#### Scenario: LLM 超时不崩 handle_response
+
+- **WHEN** `_summarize` 内部 `llm.invoke` 抛出任意异常
+- **THEN** `maybe_fold` 返回 `False`
+- **AND** `last_folded_turn_id` 不变
+- **AND** `handle_response` 正常完成
+
+#### Scenario: LLM 返回拒绝文本不写入记忆
+
+- **WHEN** LLM 返回 `"I cannot help with that."` 或空串
+- **THEN** 不调用 `memory.remember`
+- **AND** `maybe_fold` 返回 `False`
+
+---
+
+### Requirement: Compressor 阈值必须可配置以支持小窗口模型部署
+
+`FOLD_TOKEN_THRESHOLD` 与 `FOLD_TARGET_TOKENS` 必须支持通过构造器注入；默认值（3000 / 1500）以 128k 窗口模型为参照。部署到小窗口模型（32k 及以下，如 Haiku / 本地开源模型）时，调用方必须能够在不修改源码的前提下降低阈值。
+
+#### Scenario: 构造器覆盖默认阈值
+
+- **WHEN** 以 `Compressor(history, memory, llm, fold_threshold=800, target_fold_tokens=400)` 构造
+- **THEN** 使用注入的阈值，不使用模块级默认
+
+---
+
+### Requirement: handle_response 不再将对话写入向量库 episodic
+
+`DefaultWorldEngine.handle_response` 仍将对话追加到 HistoryStore，但**不再**调用 `memory.remember(..., category=EPISODIC)`。对话的权威来源是 JSONL；向量库只承载提炼物（见 memory-interface spec）。
+
+#### Scenario: handle_response 后向量库 episodic 不增
+
+- **WHEN** 调用 `handle_response(npc_id, response)` 且 response.dialogue 非空
+- **THEN** 向量库中该 NPC 的 `episodic` 类别条目数量不变
+- **AND** HistoryStore.jsonl 新增一条 speaker=npc_id 的条目

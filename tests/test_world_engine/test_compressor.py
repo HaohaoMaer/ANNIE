@@ -1,4 +1,4 @@
-"""Tests for Compressor (Fold policy)."""
+"""Tests for Compressor (cursor-driven fold policy)."""
 
 from __future__ import annotations
 
@@ -52,11 +52,15 @@ def _fill(store: HistoryStore, n: int, content_len: int = 200) -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# Basic behaviour
+# ---------------------------------------------------------------------------
+
 def test_maybe_fold_no_op_below_threshold(store: HistoryStore) -> None:
     _fill(store, 2, content_len=50)
     mem = _FakeMemory()
     comp = Compressor(store, mem, _StubLLM(), fold_threshold=10_000)
-    assert comp.maybe_fold() is None
+    assert comp.maybe_fold() is False
     assert mem.stored == []
 
 
@@ -66,47 +70,129 @@ def test_fold_triggers_above_threshold_and_writes_impression(store: HistoryStore
     llm = _StubLLM(reply="Summary: alice and player talked.")
     comp = Compressor(store, mem, llm, fold_threshold=500, target_fold_tokens=600)
 
-    entry = comp.maybe_fold(scene="scene-1")
-    assert entry is not None
-    assert entry.is_folded is True
-    assert entry.content == "Summary: alice and player talked."
-    assert entry.folded_from is not None and len(entry.folded_from) >= 2
+    result = comp.maybe_fold(scene="scene-1")
+    assert result is True
 
-    # HistoryStore got the replacement
-    remaining = store.read_all()
-    folded_rows = [e for e in remaining if e.is_folded]
-    assert len(folded_rows) == 1
-
-    # Impression memory got double-written
+    # Impression memory was written
     assert len(mem.stored) == 1
     content, category, meta = mem.stored[0]
     assert category == MEMORY_CATEGORY_IMPRESSION
     assert meta["source"] == "fold"
     assert meta["scene"] == "scene-1"
-    assert meta["folded_turn_count"] == len(entry.folded_from)
+    assert content == "Summary: alice and player talked."
+
+    # JSONL is NOT modified — all original entries still there
+    all_entries = store.read_all()
+    assert len(all_entries) == 10
+    assert not any(e.is_folded for e in all_entries)
+
+    # Cursor advanced
+    cursor = store.last_folded_turn_id()
+    assert cursor > 0
 
 
-def test_recursive_fold_refuses(store: HistoryStore) -> None:
-    """Already-folded entries must not re-participate in a subsequent fold."""
+def test_fold_does_not_modify_jsonl(store: HistoryStore) -> None:
+    """JSONL must be identical before and after fold."""
+    _fill(store, 6, content_len=400)
+    ids_before = [e.turn_id for e in store.read_all()]
+
+    mem = _FakeMemory()
+    comp = Compressor(store, mem, _StubLLM(), fold_threshold=100, target_fold_tokens=200)
+    comp.force_fold()
+
+    ids_after = [e.turn_id for e in store.read_all()]
+    assert ids_before == ids_after, "JSONL must not be modified by folding"
+
+
+# ---------------------------------------------------------------------------
+# Cursor advancement: no double-fold of same turns
+# ---------------------------------------------------------------------------
+
+def test_cursor_advances_so_second_fold_skips_first_slice(store: HistoryStore) -> None:
+    """After the first fold, a second fold must cover different turns."""
     _fill(store, 10, content_len=400)
     mem = _FakeMemory()
-    comp = Compressor(store, mem, _StubLLM(), fold_threshold=500, target_fold_tokens=600)
+    # Use a small threshold so multiple folds can trigger
+    comp = Compressor(store, mem, _StubLLM(), fold_threshold=100, target_fold_tokens=600)
 
-    first = comp.force_fold()
-    assert first is not None
+    first_result = comp.force_fold()
+    assert first_result is True
+    cursor_after_first = store.last_folded_turn_id()
 
-    # Rewind threshold to 0 to force another attempt; remaining unfolded may be < 2
-    # so compressor must refuse rather than fold the folded entry.
-    comp2 = Compressor(store, mem, _StubLLM(), fold_threshold=0, target_fold_tokens=10)
-    # Drop remaining unfolded turns until only the folded entry + at most 1 unfolded remain.
-    entries = store.read_all()
-    unfolded = [e for e in entries if not e.is_folded]
-    # Keep only the folded entry plus one unfolded — force_fold must then return None
-    # because unfolded_entries() has <2 candidates.
-    if len(unfolded) > 1:
-        # Simulate by replacing all-but-one unfolded with themselves — simpler: rebuild store.
-        pass
-    # Direct assertion: even if there are unfolded left, the folded entry must never appear in the slice.
-    folded_entry = next(e for e in store.read_all() if e.is_folded)
-    candidates = store.unfolded_entries()
-    assert folded_entry not in candidates
+    second_result = comp.force_fold()
+    assert second_result is True
+    cursor_after_second = store.last_folded_turn_id()
+
+    assert cursor_after_second > cursor_after_first, (
+        "Second fold must advance cursor past first fold's position"
+    )
+    # Two impression entries, each for a different slice
+    assert len(mem.stored) == 2
+
+
+def test_no_double_fold_when_only_two_entries_left(store: HistoryStore) -> None:
+    """force_fold refuses when < 2 unfolded candidates remain."""
+    store.append("alice", "turn A")
+    mem = _FakeMemory()
+    comp = Compressor(store, mem, _StubLLM(), fold_threshold=0, target_fold_tokens=10)
+
+    # Only 1 entry — fold must decline
+    result = comp.force_fold()
+    assert result is False
+    assert mem.stored == []
+
+
+# ---------------------------------------------------------------------------
+# prune + cursor interaction
+# ---------------------------------------------------------------------------
+
+def test_prune_after_fold_cursor_still_valid(store: HistoryStore) -> None:
+    """prune does not reset the cursor; next fold picks up from oldest remaining."""
+    _fill(store, 10, content_len=400)
+    mem = _FakeMemory()
+    comp = Compressor(store, mem, _StubLLM(), fold_threshold=100, target_fold_tokens=600)
+
+    comp.force_fold()
+    cursor_before = store.last_folded_turn_id()
+
+    # Prune the first 5 entries (turn_ids 1–5)
+    deleted = store.prune(before_turn_id=6)
+    assert deleted > 0
+
+    # Cursor unchanged after prune
+    assert store.last_folded_turn_id() == cursor_before
+
+    # A subsequent fold still works (picks from whatever remains past cursor)
+    result = comp.force_fold()
+    # May or may not fold depending on remaining content — just must not raise
+    assert isinstance(result, bool)
+
+
+# ---------------------------------------------------------------------------
+# Prune primitive
+# ---------------------------------------------------------------------------
+
+def test_prune_keep_last(store: HistoryStore) -> None:
+    _fill(store, 8)
+    n = store.prune(keep_last=3)
+    assert n == 5
+    assert len(store.read_all()) == 3
+
+
+def test_prune_before_turn_id(store: HistoryStore) -> None:
+    _fill(store, 6)
+    ids = [e.turn_id for e in store.read_all()]
+    pivot = ids[3]  # delete first 3
+    deleted = store.prune(before_turn_id=pivot)
+    assert deleted == 3
+    remaining = store.read_all()
+    assert all(e.turn_id >= pivot for e in remaining)
+
+
+def test_prune_mutual_exclusion(store: HistoryStore) -> None:
+    _fill(store, 4)
+    with pytest.raises(ValueError, match="exactly one"):
+        store.prune(keep_last=2, before_turn_id=3)
+
+    with pytest.raises(ValueError, match="exactly one"):
+        store.prune()

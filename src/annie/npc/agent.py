@@ -19,10 +19,14 @@ from annie.npc.context import AgentContext
 from annie.npc.context_budget import ContextBudget
 from annie.npc.executor import SKIP_TASK_MARKER, Executor
 from annie.npc.planner import Planner
+from annie.npc.prompts import render_todo_text
 from annie.npc.reflector import Reflector
 from annie.npc.response import AgentResponse
 from annie.npc.state import AgentState, Task, TaskStatus
+from annie.npc.skills.base_skill import SkillRegistry
+from annie.npc.skills.registry import load_dir as load_skill_dir
 from annie.npc.sub_agents.memory_agent import MemoryAgent
+from annie.npc.sub_agents.skill_agent import SkillAgent
 from annie.npc.sub_agents.tool_agent import ToolAgent
 from annie.npc.tools.tool_registry import ToolRegistry
 from annie.npc.tracing import Tracer
@@ -41,10 +45,14 @@ class NPCAgent:
         llm: BaseChatModel,
         max_retries: int = _DEFAULT_MAX_RETRIES,
         model_ctx_limit: int = _DEFAULT_MODEL_CTX_LIMIT,
+        skills_dir: str | None = None,
     ):
         self.llm = llm
         self.max_retries = max_retries
         self.model_ctx_limit = model_ctx_limit
+        self._skill_registry: SkillRegistry = (
+            load_skill_dir(skills_dir) if skills_dir else SkillRegistry()
+        )
 
     # ------------------------------------------------------------------
     def run(self, context: AgentContext) -> AgentResponse:
@@ -55,11 +63,28 @@ class NPCAgent:
         tool_registry = ToolRegistry(injected=list(context.tools))
         tool_agent = ToolAgent(tool_registry)
 
+        # Merge global skill registry with AgentContext.skills (context wins).
+        run_skills = SkillRegistry()
+        for s in self._skill_registry.list_skills():
+            run_skills.add(s)
+        for s in context.skills:
+            run_skills.add(s)
+        skill_agent = SkillAgent(run_skills)
+
+        # Expose to the use_skill built-in via AgentContext.extra.
+        context.extra.setdefault("_skill_agent", skill_agent)
+        context.extra.setdefault("_tool_registry", tool_registry)
+        # Run-scoped recall dedup: records returned in <working_memory> won't
+        # appear again in tool responses for the duration of this run.
+        context.extra.setdefault("_recall_seen_ids", set())
+
         planner = Planner(self.llm)
         executor = Executor(self.llm, tool_agent)
         reflector = Reflector(self.llm, memory_agent)
 
         graph = _build_graph(planner, executor, reflector)
+
+        seen_ids: set[str] = context.extra["_recall_seen_ids"]
 
         initial: AgentState = {
             "agent_context": context,
@@ -68,7 +93,7 @@ class NPCAgent:
             "current_task": None,
             "execution_results": [],
             "reflection": "",
-            "working_memory": memory_agent.build_context(context.input_event),
+            "working_memory": memory_agent.build_context(context.input_event, seen_ids=seen_ids),
             "tracer": tracer,
             "retry_count": 0,
             "max_retries": self.max_retries,
@@ -77,6 +102,8 @@ class NPCAgent:
             "react_steps": [],
             "messages": [],
             "context_budget": ContextBudget(model_ctx_limit=self.model_ctx_limit),
+            "todo_list_text": render_todo_text(context.memory),
+            "active_skills": [],
         }
 
         final_state = graph.invoke(initial)

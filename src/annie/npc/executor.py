@@ -31,7 +31,11 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
-from annie.npc.prompts import MEMORY_CATEGORIES_BLOCK, render_identity
+from annie.npc.prompts import (
+    MEMORY_CATEGORIES_BLOCK,
+    render_identity,
+    render_skills_text,
+)
 from annie.npc.state import AgentState, Task, TaskStatus
 from annie.npc.tracing import EventType
 
@@ -58,6 +62,9 @@ EXECUTOR_SYSTEM_TEMPLATE = """\
 <working_memory>
 {working_memory}
 </working_memory>
+<todo>
+{todo}
+</todo>
 <available_skills>
 {skills}
 </available_skills>
@@ -87,6 +94,7 @@ class Executor:
         tasks = state.get("tasks", [])
         budget = state.get("context_budget")
         working_memory = state.get("working_memory", "")
+        todo_text = state.get("todo_list_text", "")
 
         span = tracer.node_span("executor") if tracer else _nullcontext()
         with span:
@@ -96,7 +104,7 @@ class Executor:
 
             for task in tasks:
                 task.status = TaskStatus.IN_PROGRESS
-                messages = self._initial_messages(ctx, task, working_memory)
+                messages = self._initial_messages(ctx, task, working_memory, todo_text)
                 final_ai = self._run_loop(messages, ctx, budget, tracer)
 
                 task.status = TaskStatus.DONE
@@ -125,54 +133,83 @@ class Executor:
         tracer: Any,
     ) -> AIMessage | None:
         tool_registry = self.tool_agent.tool_registry
-        tool_defs = [tool_registry.get(n) for n in tool_registry.list_tools()]
-        tool_defs = [t for t in tool_defs if t is not None]
-        tool_schemas = [_tool_to_schema(t) for t in tool_defs]
 
-        try:
-            llm = self.llm.bind_tools(tool_schemas) if tool_schemas else self.llm  # type: ignore[attr-defined]
-        except (NotImplementedError, AttributeError):
-            llm = self.llm  # StubLLM / models without bind_tools
+        # Expose the running message list and tool registry to the use_skill
+        # built-in so it can mutate both when activating a skill.
+        extra = getattr(ctx, "extra", {})
+        prev_messages = extra.get("_messages")
+        extra["_messages"] = messages
+        extra.setdefault("_tool_registry", tool_registry)
+        frames_before = len(getattr(tool_registry, "_frames", []))
+        extra["_skill_frames"] = []
 
         last_ai: AIMessage | None = None
-        for step in range(self.max_loops):
-            if budget is not None:
-                messages[:] = budget.check(messages, self.llm)
+        try:
+            for step in range(self.max_loops):
+                if budget is not None:
+                    messages[:] = budget.check(messages, self.llm)
 
-            if tracer:
-                tracer.trace(
-                    "executor", EventType.LLM_CALL,
-                    input_summary=f"loop step {step}, {len(messages)} msgs",
-                )
-            response = llm.invoke(messages)
-            if not isinstance(response, AIMessage):
-                response = AIMessage(content=_to_text(getattr(response, "content", response)))
-            messages.append(response)
-            last_ai = response
+                # Re-read tools each iteration — a prior use_skill call may
+                # have pushed a new frame whose extra_tools must now bind.
+                tool_defs = [tool_registry.get(n) for n in tool_registry.list_tools()]
+                tool_defs = [t for t in tool_defs if t is not None]
+                tool_schemas = [_tool_to_schema(t) for t in tool_defs]
+                try:
+                    llm = self.llm.bind_tools(tool_schemas) if tool_schemas else self.llm  # type: ignore[attr-defined]
+                except (NotImplementedError, AttributeError):
+                    llm = self.llm  # StubLLM / models without bind_tools
 
-            if tracer:
-                tracer.trace(
-                    "executor", EventType.LLM_RESPONSE,
-                    output_summary=_to_text(response.content)[:100],
-                )
-
-            tool_calls = getattr(response, "tool_calls", None) or []
-            if not tool_calls:
-                return response
-
-            for call in tool_calls:
-                name = call.get("name", "")
-                call_id = call.get("id") or f"call_{step}_{name}"
                 if tracer:
                     tracer.trace(
-                        "executor", EventType.TOOL_INVOKE,
-                        output_summary=f"tool={name}", metadata={"tool": name},
+                        "executor", EventType.LLM_CALL,
+                        input_summary=f"loop step {step}, {len(messages)} msgs",
                     )
-                result = self.tool_agent.dispatch(call, ctx)
-                messages.append(ToolMessage(content=result, tool_call_id=call_id))
+                response = llm.invoke(messages)
+                if not isinstance(response, AIMessage):
+                    response = AIMessage(content=_to_text(getattr(response, "content", response)))
+                messages.append(response)
+                last_ai = response
 
-        logger.warning("Executor: hit MAX_TOOL_LOOPS=%d without a final answer", self.max_loops)
-        return last_ai
+                if tracer:
+                    tracer.trace(
+                        "executor", EventType.LLM_RESPONSE,
+                        output_summary=_to_text(response.content)[:100],
+                    )
+
+                tool_calls = getattr(response, "tool_calls", None) or []
+                if not tool_calls:
+                    return response
+
+                for call in tool_calls:
+                    name = call.get("name", "")
+                    call_id = call.get("id") or f"call_{step}_{name}"
+                    if tracer:
+                        tracer.trace(
+                            "executor", EventType.TOOL_INVOKE,
+                            output_summary=f"tool={name}", metadata={"tool": name},
+                        )
+                    result = self.tool_agent.dispatch(call, ctx)
+                    messages.append(ToolMessage(content=result, tool_call_id=call_id))
+
+            logger.warning(
+                "Executor: hit MAX_TOOL_LOOPS=%d without a final answer",
+                self.max_loops,
+            )
+            return last_ai
+        finally:
+            # Pop any skill frames this task activated so their extra_tools
+            # do not leak into subsequent tasks.
+            for frame_id in reversed(extra.get("_skill_frames", [])):
+                tool_registry.pop_frame(frame_id)
+            # Safety net: if something skipped frame-id tracking, unwind any
+            # residual frames pushed during this loop.
+            while len(getattr(tool_registry, "_frames", [])) > frames_before:
+                tool_registry.pop_frame()
+            extra["_skill_frames"] = []
+            if prev_messages is None:
+                extra.pop("_messages", None)
+            else:
+                extra["_messages"] = prev_messages
 
     # ---- message assembly ----------------------------------------------
     def _initial_messages(
@@ -180,6 +217,7 @@ class Executor:
         ctx: Any,
         task: Task,
         working_memory: str = "",
+        todo_text: str = "",
     ) -> list[BaseMessage]:
         world_rules = getattr(ctx, "world_rules", "") or ""
         situation = getattr(ctx, "situation", "") or ""
@@ -187,13 +225,25 @@ class Executor:
         input_event = getattr(ctx, "input_event", "") or ""
         npc_id = getattr(ctx, "npc_id", "") or ""
 
+        # Merge AgentContext.skills with any skills the running SkillAgent
+        # exposes via extra["_skill_agent"] (global registry union, context wins).
+        ctx_skills = list(getattr(ctx, "skills", []) or [])
+        by_name = {s.name: s for s in ctx_skills}
+        extra = getattr(ctx, "extra", {}) or {}
+        skill_agent = extra.get("_skill_agent")
+        if skill_agent is not None:
+            for s in skill_agent.skill_registry.list_skills():
+                by_name.setdefault(s.name, s)
+        skills_text = render_skills_text(list(by_name.values()))
+
         system = SystemMessage(content=EXECUTOR_SYSTEM_TEMPLATE.format(
             identity=render_identity(ctx),
             world_rules=world_rules,
             situation=situation,
             memory_categories=MEMORY_CATEGORIES_BLOCK,
             working_memory=working_memory.strip() or "(none)",
-            skills="(none this run)",
+            todo=todo_text.strip() or "(none)",
+            skills=skills_text,
         ))
 
         history_msgs = _history_to_messages(history, npc_id)

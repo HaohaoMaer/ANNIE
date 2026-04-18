@@ -84,6 +84,9 @@ class AgentState(TypedDict, total=False):
     # Executor tool-use loop (per-run working memory)
     messages: list[Any]  # list[BaseMessage]; Any to keep state module free of langchain import
     context_budget: Any  # ContextBudget | None
+    # Prompt-time pre-renders
+    todo_list_text: str
+    active_skills: list[str]
 
 
 def load_npc_profile(path: str | Path) -> NPCProfile:

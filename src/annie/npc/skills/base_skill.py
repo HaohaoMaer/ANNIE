@@ -1,30 +1,29 @@
-"""SkillDef — the contract skills must satisfy.
+"""SkillDef — manifest for a prompt + extra-tools bundle.
 
-Skills are *not* LLM-callable tools. They are prompt-template + allowed-tool
-bundles. The Executor activates a skill by injecting its ``prompt_template``
-into the LLM system prompt and restricting the tool set to ``allowed_tools``.
-
-Concrete Skill instances live in the world-engine layer; this module only
-defines the contract and a small registry used for matching / injection.
+Skills are *not* LLM-callable tools. They are activated through the built-in
+``use_skill(skill_name, args)`` tool, which appends ``skill.prompt`` as a
+SystemMessage and temporarily unlocks ``skill.extra_tools`` in the current
+Executor tool loop. ``one_line`` is the only detail surfaced in the
+``<available_skills>`` XML section (progressive disclosure, layer 1).
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from pydantic import BaseModel, Field
 
 
-@dataclass
-class SkillDef:
-    """A skill: a prompt template plus a whitelist of allowed tools."""
+class SkillDef(BaseModel):
+    """A skill manifest: prompt + extra-tool whitelist."""
 
     name: str
-    description: str
-    prompt_template: str
-    allowed_tools: list[str] = field(default_factory=list)
+    one_line: str = ""
+    prompt: str = ""
+    extra_tools: list[str] = Field(default_factory=list)
+    triggers: list[str] = Field(default_factory=list)
 
 
 class SkillRegistry:
-    """Minimal registry for SkillDef instances injected via AgentContext."""
+    """In-memory index of SkillDef by name."""
 
     def __init__(self, skills: list[SkillDef] | None = None) -> None:
         self.skills: dict[str, SkillDef] = {}
@@ -32,11 +31,14 @@ class SkillRegistry:
             for s in skills:
                 self.skills[s.name] = s
 
+    def add(self, skill: SkillDef) -> None:
+        self.skills[skill.name] = skill
+
     def get(self, name: str) -> SkillDef | None:
         return self.skills.get(name)
 
-    def list_skills(self) -> list[str]:
-        return list(self.skills.keys())
+    def list_skills(self) -> list[SkillDef]:
+        return list(self.skills.values())
 
-    def get_descriptions(self) -> dict[str, str]:
-        return {name: s.description for name, s in self.skills.items()}
+    def names(self) -> list[str]:
+        return list(self.skills.keys())

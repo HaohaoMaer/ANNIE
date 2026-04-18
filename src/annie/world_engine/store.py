@@ -85,6 +85,29 @@ class MemoryStore:
                 self._auto_prune()
         return doc_id
 
+    def upsert(
+        self,
+        content: str,
+        category: str,
+        metadata: dict[str, Any] | None = None,
+        doc_id: str | None = None,
+    ) -> str:
+        """Insert or update a record by stable id (used for dedup categories)."""
+        if doc_id is None:
+            doc_id = uuid.uuid4().hex[:12]
+        meta: dict[str, Any] = dict(metadata or {})
+        meta["category"] = category
+        meta["npc_id"] = self._npc_id
+        meta.setdefault("created_at", datetime.now(UTC).isoformat())
+        meta = {k: _to_scalar(v) for k, v in meta.items()}
+        with ChromaWriteGuard():
+            self._collection.upsert(
+                documents=[content],
+                ids=[doc_id],
+                metadatas=[meta],
+            )
+        return doc_id
+
     def _auto_prune(self) -> int:
         all_docs = self._collection.get(include=["metadatas"])
         if not all_docs["ids"]:
@@ -134,18 +157,16 @@ class MemoryStore:
         Pulls candidates via ``collection.get(where=...)`` and filters in
         Python; returns up to ``k`` entries sorted by ``created_at`` desc.
         """
-        if not pattern:
-            return []
         if self._collection.count() == 0:
             return []
         kwargs: dict[str, Any] = {"include": ["documents", "metadatas"]}
         if where:
             kwargs["where"] = where
         results = self._collection.get(**kwargs)
-        needle = pattern.casefold()
+        needle = pattern.casefold() if pattern else ""
         hits: list[tuple[MemoryEntry, str]] = []
         for doc, meta in zip(results["documents"] or [], results["metadatas"] or []):  # type: ignore[arg-type]
-            if needle not in str(doc).casefold():
+            if needle and needle not in str(doc).casefold():
                 continue
             ts = str(meta.get("created_at", "")) if meta else ""
             hits.append((

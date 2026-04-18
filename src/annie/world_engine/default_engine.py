@@ -23,10 +23,7 @@ from chromadb.api import ClientAPI
 from langchain_core.language_models import BaseChatModel
 
 from annie.npc.context import AgentContext
-from annie.npc.memory.interface import (
-    MEMORY_CATEGORY_EPISODIC,
-    MemoryInterface,
-)
+from annie.npc.memory.interface import MemoryInterface
 from annie.npc.response import AgentResponse
 from annie.npc.state import NPCProfile, load_npc_profile
 from annie.world_engine.base import WorldEngine
@@ -103,15 +100,9 @@ class DefaultWorldEngine(WorldEngine):
     def handle_response(self, npc_id: str, response: AgentResponse) -> None:
         self._responses.append((npc_id, response))
         history = self.history_for(npc_id)
-        memory = self.memory_for(npc_id)
 
         if response.dialogue and history is not None:
             history.append(speaker=npc_id, content=response.dialogue)
-            memory.remember(
-                response.dialogue,
-                category=MEMORY_CATEGORY_EPISODIC,
-                metadata={"speaker": npc_id},
-            )
 
         compressor = self.compressor_for(npc_id)
         if compressor is not None:

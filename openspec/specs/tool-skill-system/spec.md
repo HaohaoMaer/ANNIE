@@ -19,9 +19,10 @@
 
 #### Scenario: Skill 的激活
 
-- **WHEN** Executor 处理任务时发现任务与某个 Skill 匹配
-- **THEN** 该 Skill 的 prompt_template 被拼接到当前 LLM 调用的 system prompt 中
-- **AND** 本次调用可用的 tool 列表被限制为该 Skill 的 allowed_tools
+- **WHEN** LLM 调用 `use_skill(skill_name, args)` built-in 工具
+- **THEN** 该 Skill 的 `prompt` 被追加为 SystemMessage 到当前 messages 列表
+- **AND** 本次 Executor loop 的后续轮次可见 skill.extra_tools 中声明的工具
+- **AND** Executor loop 结束时 extra_tools 从 ToolRegistry 帧栈弹出，不再可见
 
 #### Scenario: Skill 不是 Tool
 
@@ -63,18 +64,33 @@
 
 每个 Skill 必须具备：
 
-- 唯一的 `name`
-- `description`：技能的用途与何时使用
-- `allowed_tools`：该技能激活时 LLM 可调用的 Tool 名字子集
-- `prompt_template`：技能的流程指导（可含占位符）
+- `name`：唯一 id
+- `one_line`：一句话描述，作为 `<available_skills>` 的渐进披露第一层
+- `prompt`：激活时追加到 messages 的 SystemMessage 内容
+- `extra_tools`：激活时临时可见的 tool id 列表；所引用 tool 必须在 ToolRegistry 或 AgentContext.tools 中已注册
+- `triggers`（可选）：人类/UI 索引用关键词，不参与自动激活
 
-具体字段类型与匹配算法由 plan 阶段决定。首版匹配算法可为关键字 / name 匹配，后续可优化为语义匹配。
+Skill 可通过 YAML manifest（`skill.yaml`）+ 同目录 `prompt.md` 的文件形式组织，由 `SkillRegistry.load_dir(path)` 统一加载。
 
-#### Scenario: Skill 限制可用工具
+#### Scenario: Skill 解锁额外工具
 
-- **WHEN** 名为 "interrogation" 的 Skill 被激活
-- **THEN** 本次 LLM 调用仅能看到 allowed_tools 中声明的工具
-- **AND** 即使 AgentContext 提供了更多工具，也被临时隔离
+- **WHEN** `use_skill(skill_name="deduction")` 被调用
+- **AND** deduction 的 `extra_tools` 中含 `evidence_cross_check`
+- **THEN** 本 Executor loop 的下一轮 bind_tools 中必须包含 `evidence_cross_check`
+- **AND** 该工具在 Executor loop 结束后不再可见
+
+#### Scenario: Skill 激活不 fork 子 Agent
+
+- **WHEN** `use_skill` 被调用
+- **THEN** 当前 AgentContext / messages / tool_registry 保持同一实例
+- **AND** 不得创建新的 NPCAgent / 新 LangGraph 执行
+
+#### Scenario: extra_tools 引用必须存在
+
+- **WHEN** 激活 `SkillDef(extra_tools=["evidence_cross_check"])`
+- **AND** `evidence_cross_check` 未在 ToolRegistry 注册
+- **THEN** 激活期必须立即报错（ValueError）
+- **AND** 不得静默跳过
 
 #### Scenario: Skill 无 schema
 
@@ -182,4 +198,70 @@ Tool.call 方法接收的 ctx 参数中，必须能访问当前运行的 AgentCo
 
 - **WHEN** 模型未调用 `inner_monologue`
 - **THEN** `AgentResponse.inner_thought` 为空字符串
+
+---
+
+### Requirement: Skill 激活必须通过 `use_skill` 工具显式发起，不允许自动匹配
+
+`use_skill(skill_name, args)` 是 Skill 激活的唯一入口。Skill 不得作为独立 tool 注册进 tool schema，防止 skill 数量膨胀时污染 LLM 工具列表。
+
+- Skill 激活必须**同进程、in-loop**：在当前 Executor tool loop 内追加一个 SystemMessage（skill.prompt）并临时解锁 extra_tools，不得 fork 子 Agent。
+- Skill 的退出为"自然退出"：当模型下一轮不再 tool_call 时 Executor loop 正常结束，同时卸载临时工具（pop_frame）。
+- 同一 run 内允许叠加多个 skill 激活，按栈式顺序 pop。
+
+#### Scenario: Skill 名称在 tool schema 中不出现
+
+- **WHEN** LLM 查看可调用 tool 列表
+- **THEN** 看到的是 `use_skill`，而非具体 skill 名
+- **AND** 具体 skill 名通过 system prompt 的 `<available_skills>` 段暴露
+
+---
+
+### Requirement: built-in 工具必须包含 `plan_todo`，支持跨回合目标持久化
+
+`plan_todo` 作为 built-in 工具提供 `add / complete / list` 三个动作，持久化使用 `category="todo"` 的长期记忆：
+
+- `add(content)` 写入一条 open 状态的 todo 记忆（metadata: `{status: open, todo_id: <8-hex>, created_at: <ISO8601 UTC>}`）
+- `complete(todo_id)` 以事件追加的方式标记某个 todo 为 closed（不修改原记录）；调用前必须校验该 id 存在且状态为 open，否则返回 `{"success": False, "error": "unknown or already closed"}` 且不写任何记录
+- `list()` 返回当前未关闭的 todo 集合（open 集合减去 closed 集合），每项包含 `{todo_id, content, timestamp}`，按 `timestamp` 倒序（最新在前）
+
+Executor system prompt 必须在 `<todo>` 段渲染当前所有 open 的 todo；渲染过程在 `run()` 入口完成（与 `working_memory` 同阶段）。
+
+#### Scenario: 跨 run 可见
+
+- **WHEN** run1 调用 `plan_todo(add, "去厨房找匕首")`
+- **THEN** run2 的 Executor system `<todo>` 段必须列出该项
+
+#### Scenario: complete 后不再出现
+
+- **WHEN** run2 调用 `plan_todo(complete, todo_id)`
+- **THEN** run3 的 `<todo>` 段不再显示该项
+
+#### Scenario: todo 作为一等 category
+
+- **WHEN** 模型在 `memory_recall(categories=["todo"])` 中查询
+- **THEN** 能检索到 open / closed 所有 todo 条目
+- **AND** 不应在 `episodic / semantic / reflection / impression` 中出现 todo 条目
+
+#### Scenario: complete 未知 id 不写记录
+
+- **WHEN** 对一个不存在的 todo_id 调用 `plan_todo(complete)`
+- **THEN** 工具返回 `{"success": False, "error": ...}`
+- **AND** 向量库 `todo` 类别下没有新增 closed 记录
+
+#### Scenario: complete 已关闭 id 失败
+
+- **WHEN** 同一 todo_id 被 `complete` 两次
+- **THEN** 第二次返回失败且不写记录
+
+#### Scenario: add 写入 created_at 元数据
+
+- **WHEN** 调用 `plan_todo(add, content)`
+- **THEN** 写入记录的 metadata 中包含 `created_at`（ISO8601 UTC 格式）与 `todo_id`
+
+#### Scenario: list 带元数据且倒序
+
+- **WHEN** 先后 `add("A")` 与 `add("B")` 两个 todo
+- **THEN** `list()` 返回顺序为 `[B, A]`
+- **AND** 每项含 `todo_id / content / timestamp` 三字段
 

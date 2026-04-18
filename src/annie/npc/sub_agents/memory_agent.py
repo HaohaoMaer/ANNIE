@@ -3,6 +3,14 @@
 This adapter exists so the Executor / Reflector can call a small, stable
 surface (``build_context``, ``remember``, ``recall``) without importing the
 protocol module directly. It has no state, no policy; it just forwards.
+
+Recall dedup
+------------
+``build_context`` accepts an optional ``seen_ids`` set (run-scoped).  Any
+record returned by the underlying ``build_context`` call has its content
+registered in that set.  ``MemoryRecallTool`` and ``MemoryGrepTool`` do the
+symmetric filtering on the tool side.  The "id" used here is the record
+content string (stable, cheap, and exactly the thing the LLM sees).
 """
 
 from __future__ import annotations
@@ -16,6 +24,8 @@ from annie.npc.memory.interface import (
     MemoryRecord,
 )
 
+_BUILD_CONTEXT_K = 8
+
 
 class MemoryAgent:
     """Thin adapter over MemoryInterface."""
@@ -23,8 +33,24 @@ class MemoryAgent:
     def __init__(self, memory: MemoryInterface):
         self._memory = memory
 
-    def build_context(self, query: str) -> str:
-        return self._memory.build_context(query)
+    def build_context(self, query: str, seen_ids: set[str] | None = None) -> str:
+        """Build working-memory string and register shown content in ``seen_ids``.
+
+        If ``seen_ids`` is provided, every content string that appears in the
+        returned digest is added to the set so that downstream tool calls can
+        skip them.
+        """
+        text = self._memory.build_context(query)
+        if seen_ids is not None and text and text != "No relevant memories.":
+            # Best-effort: register the content we know was recalled.
+            # We pull the raw records to get their content strings.
+            try:
+                records = self._memory.recall(query, k=_BUILD_CONTEXT_K)
+                for r in records:
+                    seen_ids.add(r.content)
+            except Exception:  # noqa: BLE001 — don't let dedup failure break the run
+                pass
+        return text
 
     def recall(
         self,

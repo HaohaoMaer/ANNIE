@@ -2,11 +2,20 @@
 
 Backed by a single per-NPC ChromaDB collection (``MemoryStore``) whose
 entries are tagged with a ``category`` metadata field. Implements the
-``MemoryInterface`` protocol the NPC Agent layer expects.
+``MemoryInterface`` protocol the NPC Agent expects.
+
+Write policy
+------------
+* ``semantic`` / ``reflection``: **upsert** with stable content-hash id
+  (``sha1(category|content|person)[:16]``).  Same fact written twice →
+  single record (timestamp refreshed).
+* All other categories (``impression``, ``todo``, …): ``add`` + uuid.
+  Impression summaries cover different time windows so dedup is wrong.
 """
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 import chromadb
@@ -19,6 +28,9 @@ from annie.npc.memory.interface import (
 )
 from annie.world_engine.store import MemoryStore
 
+# Categories that use upsert + stable id (dedup by content + person).
+_DEDUP_CATEGORIES = {"semantic", "reflection"}
+
 _MIN_RELEVANCE = 0.35
 _BUILD_CONTEXT_MAX_CHARS = 1500
 _BUILD_CONTEXT_K = 8
@@ -29,6 +41,17 @@ _CATEGORY_LABELS: dict[str, str] = {
     "reflection": "Prior reflections",
     "impression": "Impressions",
 }
+
+
+def _dedup_id(category: str, content: str, metadata: dict[str, Any]) -> str:
+    """Stable 16-hex id for dedup-eligible categories (semantic, reflection).
+
+    Incorporates ``person`` metadata so that the same observation written
+    about two different people is stored as two separate records.
+    """
+    person = str(metadata.get("person", ""))
+    raw = f"{category}|{content}|{person}".encode()
+    return hashlib.sha1(raw).hexdigest()[:16]  # noqa: S324 — not a security hash
 
 
 class DefaultMemoryInterface(MemoryInterface):
@@ -70,8 +93,6 @@ class DefaultMemoryInterface(MemoryInterface):
         metadata_filters: dict[str, Any] | None = None,
         k: int = 20,
     ) -> list[MemoryRecord]:
-        if not pattern:
-            return []
         clauses: list[dict[str, Any]] = []
         if category is not None:
             clauses.append({"category": category})
@@ -100,7 +121,11 @@ class DefaultMemoryInterface(MemoryInterface):
         category: str = MEMORY_CATEGORY_SEMANTIC,
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        self._store.store(content, category=category, metadata=metadata)
+        if category in _DEDUP_CATEGORIES:
+            doc_id = _dedup_id(category, content, metadata or {})
+            self._store.upsert(content, category=category, metadata=metadata, doc_id=doc_id)
+        else:
+            self._store.store(content, category=category, metadata=metadata)
 
     def build_context(self, query: str) -> str:
         entries = self._store.retrieve(query, categories=None, k=_BUILD_CONTEXT_K)
