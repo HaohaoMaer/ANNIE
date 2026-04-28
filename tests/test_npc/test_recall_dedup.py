@@ -1,14 +1,10 @@
-"""Unit tests for run-scoped recall dedup.
-
-The ``_recall_seen_ids`` set in ``AgentContext.extra`` prevents records shown
-in ``<working_memory>`` from appearing again in tool call responses.
-"""
+"""Unit tests for run-scoped recall dedup."""
 
 from __future__ import annotations
 
 from annie.npc.context import AgentContext
 from annie.npc.memory.interface import MemoryRecord
-from annie.npc.sub_agents.memory_agent import MemoryAgent
+from annie.npc.runtime.memory_context import MemoryContextBuilder
 from annie.npc.tools.base_tool import ToolContext
 from annie.npc.tools.builtin import MemoryGrepTool, MemoryRecallTool
 
@@ -44,9 +40,9 @@ def _make_ctx(memory, seen_ids):
         npc_id="test",
         input_event="event",
         memory=memory,
-        extra={"_recall_seen_ids": seen_ids},
+        extra={},
     )
-    return ToolContext(agent_context=agent_ctx)
+    return ToolContext(agent_context=agent_ctx, runtime={"recall_seen_ids": seen_ids})
 
 
 # ---------------------------------------------------------------------------
@@ -59,8 +55,8 @@ def test_build_context_populates_seen_ids():
     mem = _StubMemory(recs)
     seen: set[str] = set()
 
-    agent = MemoryAgent(mem)
-    agent.build_context("query", seen_ids=seen)
+    builder = MemoryContextBuilder(mem)
+    builder.build_context("query", seen_ids=seen)
 
     # seen_ids must now contain the contents surfaced by build_context
     assert "fact A" in seen
@@ -113,11 +109,11 @@ def test_grep_tool_filters_seen_ids():
 
 
 def test_no_seen_ids_passes_through():
-    """When _recall_seen_ids is absent, all records are returned (no dedup)."""
+    """When runtime recall_seen_ids is absent, all records are returned."""
     recs = _records("fact A", "fact B")
     mem = _StubMemory(recs)
     agent_ctx = AgentContext(npc_id="test", input_event="e", memory=mem, extra={})
-    ctx = ToolContext(agent_context=agent_ctx)
+    ctx = ToolContext(agent_context=agent_ctx, runtime={})
 
     tool = MemoryRecallTool()
     result = tool.call({"query": "anything", "k": 10}, ctx)

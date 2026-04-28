@@ -1,0 +1,325 @@
+{
+  "case_id": "double_shadow",
+  "title": "双重暗影",
+  "locked_at": "2026-04-20T12:30:00Z",
+  "motive": {
+    "primary": "夺回被剽窃的人生与复仇",
+    "category": "revenge",
+    "secondary_contributing_factors": [
+      "十年牢狱之灾",
+      "对阶级不公的极端愤怒"
+    ],
+    "backstory_summary": "十年前，周正与陆远山是室友。陆剽窃了周的算法，并纵火烧毁了周的所有原稿，杀死了唯一的证人。周正没有任何法律证据。周出狱后通过陈默的协助，决定彻底‘吞噬’陆。",
+    "why_now": "陆远山的公司即将上市，这是夺取其资产的最佳时机。",
+    "why_not_simpler_path": "所有物证已被毁，法律途径无望，且周正深陷对自我原有身份的厌恶，唯有取代对方才能生存。"
+  },
+  "method": {
+    "summary": "通过整容和长达半年的模仿，周正引诱陆远山来到烂尾楼，强迫其扮演绑匪并杀害，利用警方强攻完成受害者身份的合法化。",
+    "weapon_or_instrument": "特制的手工折叠刀（由陈默提供）",
+    "acquisition_of_instrument": "陈默通过非法黑市购买并改装，不留任何编号。",
+    "steps": [
+      {
+        "order": 1,
+        "time": "T-48h",
+        "actor_npc_id": "npc_survivor_lu",
+        "action": "在公司地库绑架陆远山，由陈默伪造监控",
+        "location": "公司地库",
+        "produces_evidence": [
+          "ev_remote_login_log"
+        ]
+      },
+      {
+        "order": 2,
+        "time": "T-2h",
+        "actor_npc_id": "npc_survivor_lu",
+        "action": "在烂尾楼强迫陆远山戴上假发和变声器，随后将其杀害",
+        "location": "烂尾楼三层",
+        "produces_evidence": [
+          "ev_fake_hair_and_voice_changer",
+          "ev_old_k_hidden_phone"
+        ]
+      },
+      {
+        "order": 3,
+        "time": "T-0",
+        "actor_npc_id": "npc_survivor_lu",
+        "action": "在陆远山濒死前强行让其握住凶器，并在其双臂制造防御性划痕，随后清理自己身上的血迹，伪造夺刀反杀假象",
+        "location": "烂尾楼三层",
+        "produces_evidence": [
+          "ev_staged_struggle_pattern"
+        ]
+      }
+    ],
+    "cover_up_actions": [
+      {
+        "action": "通过整容和陈默的技术支持，利用陆远山的视网膜备份骗过公司安保",
+        "actor_npc_id": "npc_assistant_chen",
+        "time": "案发前半年",
+        "success": "perfect"
+      }
+    ]
+  },
+  "judgement_rubric": {
+    "core_questions": [
+      {
+        "id": "q_culprit",
+        "question": "谁杀害了真正的陆远山？",
+        "correct_answer": "npc_survivor_lu (周正)",
+        "acceptable_variants": [
+          "周正",
+          "那个活着的陆远山",
+          "冒牌货"
+        ],
+        "weight": 0.4,
+        "scoring_method": "exact_match",
+        "required_evidence_to_justify": [
+          "ev_dental_record_discrepancy",
+          "ev_old_k_hidden_phone"
+        ]
+      },
+      {
+        "id": "q_identity",
+        "question": "活着的那个人的真实身份是谁？",
+        "correct_answer": "周正",
+        "acceptable_variants": [
+          "真正的周正",
+          "十年前被冤枉的那个学生"
+        ],
+        "weight": 0.2,
+        "scoring_method": "semantic_similarity",
+        "required_evidence_to_justify": [
+          "ev_medical_allergy_record"
+        ]
+      },
+      {
+        "id": "q_motive",
+        "question": "本案的深层动机是什么？",
+        "correct_answer": "为了报复十年前的剽窃案并夺回人生资产",
+        "acceptable_variants": [
+          "复仇",
+          "拿回被偷走的算法"
+        ],
+        "weight": 0.2,
+        "scoring_method": "rubric_llm",
+        "required_evidence_to_justify": [
+          "ev_old_manuscript_scrap"
+        ]
+      },
+      {
+        "id": "q_accomplice",
+        "question": "谁协助了这场身份窃取？",
+        "correct_answer": "陈默 (npc_assistant_chen)",
+        "acceptable_variants": [
+          "他的助理陈默",
+          "陈默"
+        ],
+        "weight": 0.2,
+        "scoring_method": "exact_match",
+        "required_evidence_to_justify": [
+          "ev_remote_login_log"
+        ]
+      }
+    ],
+    "scoring_weights": {
+      "culprit_identification": 0.4,
+      "motive_reconstruction": 0.2,
+      "method_reconstruction": 0.2,
+      "timeline_accuracy": 0.1,
+      "evidence_citation": 0.1
+    },
+    "pass_threshold": 0.7,
+    "epilogue_resonance": "沈嘉宁坐在空荡荡的豪宅里，看着那个自称是她丈夫的男人在电视上侃侃而谈。她知道真相，但她不敢开口。窗外雨还在下，就像十年前那个剽窃发生的夜晚。真相已然明晰，但被窃取的人生永远无法归还。周正赢了，但他再也不是周正；陆远山死了，却以另一种方式活着。这不仅是一场复仇，更是一场悲剧的无限循环。"
+  },
+  "npc_refs": [
+    "npc_survivor_lu",
+    "npc_wife_shen",
+    "npc_assistant_chen",
+    "npc_old_k"
+  ],
+  "evidence": [
+    {
+      "id": "ev_medical_allergy_record",
+      "name": "陆远山的电子病历",
+      "description": "记录显示陆远山对贝类海鲜有极严重的急性过敏反应，曾因此住院。",
+      "type": "document",
+      "location_found": "陆家私人书房保险柜",
+      "discovery_difficulty": "hidden",
+      "forensic_yield": "证实陆远山有致命的海鲜过敏史",
+      "points_to_truth": [
+        "concl_identity_swap"
+      ],
+      "classification": "truth_lead",
+      "strength": "strong",
+      "unlocks_npc_tiers": [
+        {
+          "npc_id": "npc_wife_shen",
+          "tier": 3
+        },
+        {
+          "npc_id": "npc_survivor_lu",
+          "tier": 4
+        }
+      ]
+    },
+    {
+      "id": "ev_dental_record_discrepancy",
+      "name": "大学时期的牙模照片",
+      "description": "一张老照片，陆远山在大二时戴着矫正器。死者口腔中有一颗明显的由于矫正导致的异位磨牙拔除痕迹，而幸存者没有。",
+      "type": "physical",
+      "location_found": "老K处搜获",
+      "discovery_difficulty": "medium",
+      "forensic_yield": "生物特征与幸存者不符，与死者相符",
+      "points_to_truth": [
+        "concl_identity_swap"
+      ],
+      "classification": "truth_lead",
+      "strength": "strong",
+      "unlocks_npc_tiers": [
+        {
+          "npc_id": "npc_survivor_lu",
+          "tier": 4
+        }
+      ]
+    },
+    {
+      "id": "ev_old_k_hidden_phone",
+      "name": "廉价录像手机",
+      "description": "老K偷拍的视频。画面中，‘陆远山’在杀人后，对着地上的尸体练习陆远山标志性的歪头微笑，神情极度诡异。",
+      "type": "electronic",
+      "location_found": "老K的酒瓶堆里",
+      "discovery_difficulty": "hard",
+      "forensic_yield": "直接拍到杀人后的清理现场和练习表情的过程",
+      "points_to_truth": [
+        "concl_method_ritual"
+      ],
+      "classification": "truth_lead",
+      "strength": "strong",
+      "unlocks_npc_tiers": []
+    },
+    {
+      "id": "ev_remote_login_log",
+      "name": "公司服务器访问日志",
+      "description": "显示在绑架发生的 48 小时内，陆远山的账号一直有规律地登录并处理邮件。",
+      "type": "electronic",
+      "location_found": "公司 IT 部门后台",
+      "discovery_difficulty": "medium",
+      "forensic_yield": "证实有人伪造了受害者的在线假象",
+      "points_to_truth": [
+        "concl_accomplice_chen"
+      ],
+      "classification": "truth_lead",
+      "strength": "medium",
+      "unlocks_npc_tiers": [
+        {
+          "npc_id": "npc_assistant_chen",
+          "tier": 3
+        }
+      ]
+    },
+    {
+      "id": "ev_fake_hair_and_voice_changer",
+      "name": "假发与变声器",
+      "description": "在烂尾楼夹层发现的物品，假发上残留有死者的 DNA。",
+      "type": "physical",
+      "location_found": "案发现场隐藏隔层",
+      "discovery_difficulty": "medium",
+      "forensic_yield": "证实有人被强迫扮演特定角色",
+      "points_to_truth": [
+        "concl_method_ritual"
+      ],
+      "classification": "truth_lead",
+      "strength": "medium",
+      "unlocks_npc_tiers": []
+    },
+    {
+      "id": "ev_old_manuscript_scrap",
+      "name": "碎纸机残留的手稿残页",
+      "description": "从陆远山办公室碎纸机中提取出的长条形纸带。经过拼接，能看到署名周正的字迹及被圈注的‘剽窃’字样。",
+      "type": "document",
+      "location_found": "陆远山科技公司 CEO 办公室",
+      "discovery_difficulty": "medium",
+      "forensic_yield": "揭示陆远山对剽窃行为的极度焦虑，及其对原件的病态保存。",
+      "points_to_truth": [
+        "concl_motive_revenge"
+      ],
+      "classification": "truth_lead",
+      "strength": "medium",
+      "unlocks_npc_tiers": []
+    }
+  ],
+  "red_herrings": [
+    {
+      "id": "rh_wife_motive",
+      "evidence_ids": [
+        "ev_divorce_consultation_notes",
+        "ev_sedative_bottles"
+      ],
+      "npc_ids": [
+        "npc_wife_shen"
+      ],
+      "appears_to_indicate": "沈嘉宁因婚姻破裂 and 财产纠纷试图毒害丈夫。",
+      "actual_explanation": "离婚是为了逃离冒牌货，药物是为了缓解恐惧。",
+      "resolvable_by": [
+        "ev_wife_diary"
+      ],
+      "fairness_notes": "玩家应通过搜查沈嘉宁的卧室发现其真实的恐惧心理。"
+    }
+  ],
+  "timeline": [
+    {
+      "timestamp": "2026-10-18T18:00:00+08:00",
+      "event": "陆远山在公司地库失踪",
+      "location": "公司地库",
+      "participants": [
+        "npc_victim",
+        "npc_survivor_lu"
+      ],
+      "public_knowledge": true,
+      "evidence_links": [
+        "ev_remote_login_log"
+      ],
+      "notes": "由陈默协助伪造了后续的‘在线’状态。"
+    },
+    {
+      "timestamp": "2026-10-20T22:00:00+08:00",
+      "event": "周正在烂尾楼杀害陆远山",
+      "location": "烂尾楼三层",
+      "participants": [
+        "npc_survivor_lu",
+        "npc_victim"
+      ],
+      "public_knowledge": false,
+      "evidence_links": [
+        "ev_old_k_hidden_phone"
+      ],
+      "notes": "老K在窗外目睹并录像。"
+    },
+    {
+      "timestamp": "2026-10-20T22:30:00+08:00",
+      "event": "周正练习陆远山的表情并清理现场",
+      "location": "烂尾楼三层",
+      "participants": [
+        "npc_survivor_lu"
+      ],
+      "public_knowledge": false,
+      "evidence_links": [
+        "ev_old_k_hidden_phone"
+      ],
+      "notes": "这是计划中最惊悚的一环。"
+    },
+    {
+      "timestamp": "2026-10-21T00:00:00+08:00",
+      "event": "警方强攻突入现场",
+      "location": "烂尾楼三层",
+      "participants": [
+        "npc_survivor_lu",
+        "npc_victim"
+      ],
+      "public_knowledge": true,
+      "evidence_links": [
+        "ev_fake_hair_and_voice_changer"
+      ],
+      "notes": "周正表现出极度惊吓，成功误导了特警。"
+    }
+  ]
+}

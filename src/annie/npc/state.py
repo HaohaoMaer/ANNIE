@@ -1,7 +1,6 @@
 """State models for ANNIE NPC system.
 
 Defines the core data structures shared across all NPC components:
-- NPCProfile: structured NPC character definition loaded from YAML
 - Task: a decomposed unit of work for the Executor
 - AgentState: the LangGraph TypedDict flowing between nodes
 """
@@ -11,43 +10,9 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 from enum import Enum
-from pathlib import Path
 from typing import Any, TypedDict
 
-import yaml
 from pydantic import BaseModel, Field
-
-
-class Personality(BaseModel):
-    traits: list[str] = Field(default_factory=list)
-    values: list[str] = Field(default_factory=list)
-
-
-class Background(BaseModel):
-    biography: str = ""
-    past_events: list[str] = Field(default_factory=list)
-
-
-class Goals(BaseModel):
-    short_term: list[str] = Field(default_factory=list)
-    long_term: list[str] = Field(default_factory=list)
-
-
-class NPCProfile(BaseModel):
-    """Minimal NPC identity carrier after decouple refactor.
-
-    `relationships` and `cognitive_*` fields have been removed — world engines
-    parse those from YAML and fold them into the natural-language
-    ``character_prompt`` injected via ``AgentContext``.
-    """
-
-    name: str
-    personality: Personality = Field(default_factory=Personality)
-    background: Background = Field(default_factory=Background)
-    goals: Goals = Field(default_factory=Goals)
-    memory_seed: list[str] = Field(default_factory=list)
-    skills: list[str] = Field(default_factory=list)
-    tools: list[str] = Field(default_factory=list)
 
 
 class TaskStatus(str, Enum):
@@ -84,29 +49,8 @@ class AgentState(TypedDict, total=False):
     # Executor tool-use loop (per-run working memory)
     messages: list[Any]  # list[BaseMessage]; Any to keep state module free of langchain import
     context_budget: Any  # ContextBudget | None
+    runtime: dict[str, Any]
     # Prompt-time pre-renders
     todo_list_text: str
     active_skills: list[str]
-
-
-def load_npc_profile(path: str | Path) -> NPCProfile:
-    """Load an NPC profile from a YAML definition file.
-
-    Args:
-        path: Path to the NPC YAML file.
-
-    Returns:
-        A validated NPCProfile instance.
-
-    Raises:
-        FileNotFoundError: If the YAML file does not exist.
-    """
-    path = Path(path)
-    if not path.exists():
-        raise FileNotFoundError(f"NPC definition file not found: {path}")
-
-    with open(path) as f:
-        raw = yaml.safe_load(f)
-
-    npc_data = raw.get("npc", raw)
-    return NPCProfile(**npc_data)
+    memory_updates: list[Any]

@@ -1,0 +1,137 @@
+{
+  "core_conclusions": [
+    {
+      "id": "concl_identity_swap",
+      "statement": "幸存者是周正，死者是真正的陆远山。",
+      "required_for_verdict": true,
+      "weight_in_rubric": 0.4,
+      "clues_pointing_to_it": [
+        "ev_medical_allergy_record",
+        "ev_dental_record_discrepancy",
+        "npc_wife_shen_tier_3"
+      ]
+    },
+    {
+      "id": "concl_motive_revenge",
+      "statement": "周正为了报复十年前陆远山的剽窃并夺回人生而策划了这一切。",
+      "required_for_verdict": true,
+      "weight_in_rubric": 0.2,
+      "clues_pointing_to_it": [
+        "ev_old_manuscript_scrap",
+        "npc_old_k_tier_4",
+        "ev_prison_visitor_log"
+      ]
+    },
+    {
+      "id": "concl_method_ritual",
+      "statement": "周正强迫陆远山扮演绑匪后将其杀害，以此完成身份的合法‘蝉蜕’。",
+      "required_for_verdict": true,
+      "weight_in_rubric": 0.2,
+      "clues_pointing_to_it": [
+        "ev_fake_hair_and_voice_changer",
+        "ev_old_k_hidden_phone",
+        "ev_remote_login_log"
+      ]
+    },
+    {
+      "id": "concl_accomplice_chen",
+      "statement": "陈默作为内应提供了技术支持并伪造了不在场证明。",
+      "required_for_verdict": true,
+      "weight_in_rubric": 0.2,
+      "clues_pointing_to_it": [
+        "ev_artificial_retina_model",
+        "ev_command_vehicle_gps",
+        "npc_assistant_chen_tier_3"
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "id": "ev_medical_allergy_record",
+      "name": "陆远山的电子病历",
+      "description": "记录显示陆远山对贝类海鲜有极严重的急性过敏反应，曾因此住院。",
+      "type": "document",
+      "discoverable_at": {
+        "location": "陆家私人书房保险柜",
+        "requires_action": "破解密码或由沈嘉宁提供"
+      },
+      "points_to": [
+        {
+          "target_conclusion_id": "concl_identity_swap",
+          "strength": "strong",
+          "interpretation": "幸存者昨晚吃了海鲜却没事，证明他不是真正的陆远山。"
+        }
+      ],
+      "classification": "truth_lead"
+    },
+    {
+      "id": "ev_dental_record_discrepancy",
+      "name": "大学时期的牙模照片",
+      "description": "一张老照片，陆远山在大二时戴着矫正器。死者口腔中有一颗明显的由于矫正导致的异位磨牙拔除痕迹，而幸存者没有。",
+      "type": "physical",
+      "discoverable_at": {
+        "location": "老K处搜获",
+        "requires_action": "老K作为当年事件的记录者，私藏了陆的旧照"
+      },
+      "points_to": [
+        {
+          "target_conclusion_id": "concl_identity_swap",
+          "strength": "strong",
+          "interpretation": "生物特征不符。"
+        }
+      ],
+      "classification": "truth_lead"
+    },
+    {
+      "id": "ev_old_k_hidden_phone",
+      "name": "廉价录像手机",
+      "description": "老K偷拍的视频。画面中，‘陆远山’在杀人后，对着地上的尸体练习陆远山标志性的歪头微笑，神情极度诡异。",
+      "type": "electronic",
+      "discoverable_at": {
+        "location": "老K的酒瓶堆里",
+        "requires_action": "对老K施压或支付筹码"
+      },
+      "points_to": [
+        {
+          "target_conclusion_id": "concl_method_ritual",
+          "strength": "strong",
+          "interpretation": "直接证据，显示‘受害者’在案发后的异常行为。"
+        }
+      ],
+      "classification": "truth_lead"
+    }
+  ],
+  "red_herrings": [
+    {
+      "id": "rh_wife_motive",
+      "consists_of_evidence": [
+        "ev_divorce_consultation_notes",
+        "ev_sedative_bottles"
+      ],
+      "implicates_npc": "npc_wife_shen",
+      "appears_to_indicate": "沈嘉宁因婚姻破裂和财产纠纷试图毒害丈夫。",
+      "actual_explanation": "离婚是为了逃离冒牌货，药物是为了缓解恐惧。",
+      "resolvable_by": [
+        "ev_wife_diary"
+      ]
+    }
+  ],
+  "timeline": [
+    {
+      "timestamp": "T-10y",
+      "event": "剽窃案发生，周正顶罪入狱。"
+    },
+    {
+      "timestamp": "T-48h",
+      "event": "真正的陆远山被带至烂尾楼。"
+    },
+    {
+      "timestamp": "T-2h",
+      "event": "周正杀害陆远山。老K在窗外录像。"
+    },
+    {
+      "timestamp": "T-0",
+      "event": "特警突入。周正开启‘完美受害者’表演。"
+    }
+  ]
+}

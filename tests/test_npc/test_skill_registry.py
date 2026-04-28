@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import pytest
 
+from annie.npc.runtime.skill_runtime import SkillRuntime
 from annie.npc.skills.registry import load_dir
-from annie.npc.sub_agents.skill_agent import SkillAgent
 from annie.npc.tools.tool_registry import ToolRegistry
 
 
@@ -70,7 +70,7 @@ def test_load_succeeds_with_unresolvable_extra_tools(tmp_path):
 
 
 def test_extra_tools_unregistered_raises_on_activate(tmp_path):
-    """SkillAgent.activate() raises ValueError when extra_tools id not in registry."""
+    """SkillRuntime.activate() raises ValueError when extra_tools id not in registry."""
     d = tmp_path / "heavy"
     d.mkdir()
     (d / "skill.yaml").write_text(
@@ -78,10 +78,10 @@ def test_extra_tools_unregistered_raises_on_activate(tmp_path):
     )
     (d / "prompt.md").write_text("Heavy prompt.")
     registry = load_dir(tmp_path)
-    agent = SkillAgent(registry)
+    runtime = SkillRuntime(registry)
     tool_registry = ToolRegistry()
     with pytest.raises(ValueError, match="ghost_tool"):
-        agent.activate("heavy", {}, [], tool_registry)
+        runtime.activate("heavy", {}, [], tool_registry)
 
 
 def test_multiple_skills_loaded(tmp_path):

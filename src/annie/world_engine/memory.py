@@ -93,6 +93,8 @@ class DefaultMemoryInterface(MemoryInterface):
         metadata_filters: dict[str, Any] | None = None,
         k: int = 20,
     ) -> list[MemoryRecord]:
+        if not pattern and category is None and not metadata_filters:
+            return []
         clauses: list[dict[str, Any]] = []
         if category is not None:
             clauses.append({"category": category})

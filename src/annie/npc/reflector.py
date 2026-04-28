@@ -1,8 +1,4 @@
-"""Reflector — Phase 1 cleanup.
-
-Reflection writes go through
-MemoryInterface (wired in Phase 3).
-"""
+"""Reflector — produces declarative reflection and memory-update intents."""
 
 from __future__ import annotations
 
@@ -12,41 +8,26 @@ import re
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import HumanMessage, SystemMessage
 
-from annie.npc.prompts import render_identity
+from annie.npc.prompts import REFLECTOR_SYSTEM_PROMPT, build_reflector_messages
+from annie.npc.response import MemoryUpdate
 from annie.npc.state import AgentState
-from annie.npc.sub_agents.memory_agent import MemoryAgent
 from annie.npc.tracing import EventType
 
 logger = logging.getLogger(__name__)
 
-NPC_REFLECTOR_STATIC_PROMPT = """\
-You are an NPC reflection module. Review the actions just taken and generate a brief reflection.
-
-Consider:
-1. What happened and what was the outcome?
-2. What did the NPC learn from this experience?
-3. How does this affect the NPC's goals or relationships with other characters?
-
-Respond with:
-REFLECTION: <2-4 sentence reflection from the NPC's perspective>
-FACTS: ["new fact learned", "another fact"]
-RELATIONSHIP_NOTES: [{"person": "Name", "observation": "text"}]
-"""
+NPC_REFLECTOR_STATIC_PROMPT = REFLECTOR_SYSTEM_PROMPT
 
 
 class Reflector:
-    """Reviews execution results, generates reflection, writes memory."""
+    """Reviews execution results and generates memory updates without persisting."""
 
     def __init__(
         self,
         llm: BaseChatModel,
-        memory_agent: MemoryAgent,
         static_prompt: str | None = None,
     ):
         self.llm = llm
-        self.memory_agent = memory_agent
         self._static_prompt = static_prompt if static_prompt is not None else NPC_REFLECTOR_STATIC_PROMPT
 
     def set_static_prompt(self, prompt: str) -> None:
@@ -60,20 +41,15 @@ class Reflector:
 
         span = tracer.node_span("reflector") if tracer else _nullcontext()
         with span:
-            system_prompt = self._static_prompt + "\n\n" + render_identity(ctx)
-
-            actions_summary = "\n".join(
-                f"- Task: {r['task_description']}\n  Action: {r['action']}" for r in results
-            )
-            user_content = f"Original event: {input_event}\n\nActions taken:\n{actions_summary}"
-
             if tracer:
                 tracer.trace(
                     "reflector", EventType.LLM_CALL,
                     input_summary=f"{len(results)} actions to reflect on",
                 )
 
-            messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_content)]
+            messages = build_reflector_messages(ctx, input_event, results)
+            if self._static_prompt != REFLECTOR_SYSTEM_PROMPT:
+                messages[0].content = self._static_prompt
             response = self.llm.invoke(messages)
             raw = _as_text(response.content)
 
@@ -83,52 +59,64 @@ class Reflector:
             reflection, facts, rel_notes = self._parse_response(raw)
 
             episode = f"Event: {input_event}. Reflection: {reflection}"
-            self.memory_agent.store_reflection(episode)
-            if tracer:
-                tracer.trace("reflector", EventType.MEMORY_WRITE, output_summary="stored reflection memory")
-
+            memory_updates = [
+                MemoryUpdate(content=episode, type="reflection", metadata={}),
+            ]
             for fact in facts:
-                self.memory_agent.store_semantic(fact)
-            if facts and tracer:
-                tracer.trace(
-                    "reflector", EventType.MEMORY_WRITE,
-                    output_summary=f"stored {len(facts)} semantic facts",
-                )
+                memory_updates.append(MemoryUpdate(content=fact, type="semantic", metadata={}))
 
             for note in rel_notes:
                 person = note.get("person", "")
                 obs = note.get("observation", "")
                 if person and obs:
-                    self.memory_agent.store_relationship_note(person, obs)
-            if rel_notes and tracer:
+                    memory_updates.append(
+                        MemoryUpdate(content=obs, type="reflection", metadata={"person": person}),
+                    )
+            if memory_updates and tracer:
                 tracer.trace(
                     "reflector", EventType.MEMORY_WRITE,
-                    output_summary=f"stored {len(rel_notes)} relationship notes",
+                    output_summary=f"declared {len(memory_updates)} memory updates",
                 )
 
-        return {"reflection": reflection}
+        return {"reflection": reflection, "memory_updates": memory_updates}
 
     def _parse_response(self, raw: str) -> tuple[str, list[str], list[dict]]:
-        reflection = raw
-        facts: list[str] = []
-        rel_notes: list[dict] = []
+        try:
+            parsed = json.loads(raw.strip())
+        except json.JSONDecodeError:
+            logger.warning("Failed to parse reflector output as JSON: %s", raw[:200])
+            return _legacy_reflection_text(raw), [], []
 
-        if "REFLECTION:" in raw:
-            parts = raw.split("REFLECTION:", 1)[1]
-            section = parts
-            if "FACTS:" in parts:
-                reflection_part, rest = parts.split("FACTS:", 1)
-                reflection = reflection_part.strip()
-                if "RELATIONSHIP_NOTES:" in rest:
-                    facts_part, rel_part = rest.split("RELATIONSHIP_NOTES:", 1)
-                else:
-                    facts_part, rel_part = rest, ""
-                facts = _parse_list(facts_part)
-                rel_notes = _parse_rel_notes(rel_part)
-            else:
-                reflection = section.strip()
+        if not isinstance(parsed, dict):
+            return raw, [], []
 
-        return reflection, facts, rel_notes
+        reflection = parsed.get("reflection")
+        facts = parsed.get("facts", [])
+        rel_notes = parsed.get("relationship_notes", [])
+        if not isinstance(reflection, str) or not reflection.strip():
+            return raw, [], []
+        if not isinstance(facts, list):
+            facts = []
+        if not isinstance(rel_notes, list):
+            rel_notes = []
+        clean_facts = [str(f).strip() for f in facts if str(f).strip()]
+        clean_notes = [
+            n for n in rel_notes
+            if isinstance(n, dict)
+            and isinstance(n.get("person"), str)
+            and isinstance(n.get("observation"), str)
+        ]
+        return reflection.strip(), clean_facts, clean_notes
+
+
+def _legacy_reflection_text(raw: str) -> str:
+    if "REFLECTION:" not in raw:
+        return raw
+    part = raw.split("REFLECTION:", 1)[1]
+    for marker in ("FACTS:", "RELATIONSHIP_NOTES:"):
+        if marker in part:
+            part = part.split(marker, 1)[0]
+    return part.strip() or raw
 
 
 def _as_text(content: Any) -> str:

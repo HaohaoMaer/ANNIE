@@ -1,0 +1,72 @@
+{
+  "case_id": "double_shadow",
+  "title": "双重暗影",
+  "schema_versions": {
+    "truth": 1,
+    "npc": 1,
+    "evidence": 1
+  },
+  "generated_at": "2026-04-20T11:44:46.330204Z",
+  "files": [
+    {
+      "path": "truth.json",
+      "bytes": 11541,
+      "sha256": "0b8c359a64cb0295f2a38ef2f306fd2dd66f15ca089b8e33f8033fdd65b64eeb"
+    },
+    {
+      "path": "evidence/evidence.json",
+      "bytes": 4580,
+      "sha256": "1308d8744c02c6629d88c158644eab861021f54c50d0e7e963460fd910cfec04"
+    },
+    {
+      "path": "npcs/npc_assistant_chen.json",
+      "bytes": 2853,
+      "sha256": "6b6731010aaf9a1650351b1995e6162cb5b2475a52ff9667d0a748e21bc2ee79"
+    },
+    {
+      "path": "npcs/npc_old_k.json",
+      "bytes": 2436,
+      "sha256": "efe0b2b8271c3d1f56038d067e3cb0c9cee984927bca87704d8760290af1ca38"
+    },
+    {
+      "path": "npcs/npc_survivor_lu.json",
+      "bytes": 4075,
+      "sha256": "f62d3cf79b0ea3d031946c2b8e76cf05dd58d7d6b0f023b0b4737725385ac577"
+    },
+    {
+      "path": "npcs/npc_wife_shen.json",
+      "bytes": 2740,
+      "sha256": "43fbf4ce6c7d337d34631276588a2a1c1ba375b99fa8650649961bd0fc5b9cba"
+    },
+    {
+      "path": "script.md",
+      "bytes": 249,
+      "sha256": "e88be0f083871f9c4e524cf27d516962d749fcde849731a5378c938654548558"
+    },
+    {
+      "path": "dm_handbook.md",
+      "bytes": 254,
+      "sha256": "2b84e8fd19c4fb39648d16b407757bb5afa12210328924e6235f08bc4607ce23"
+    },
+    {
+      "path": "player_briefing.md",
+      "bytes": 258,
+      "sha256": "9d465c6a94587ab873e73d6a50f4b7a3bbf61270cfca778bcdb0b1abfeaf0eb6"
+    },
+    {
+      "path": "timeline.md",
+      "bytes": 251,
+      "sha256": "5cb9990ae0493d19acec4585b411dd4b6329c18994c4e8f6d6b126f1f8974a79"
+    },
+    {
+      "path": "evidence_graph.md",
+      "bytes": 1787,
+      "sha256": "783168140ef84044803ac7606e443cb75f5148aa334b149044308417dd5ed473"
+    },
+    {
+      "path": "README.md",
+      "bytes": 1683,
+      "sha256": "2162818299b8733f20352caa2f0dab33d2c975e1d9a983661ecba81b5ab8218c"
+    }
+  ]
+}

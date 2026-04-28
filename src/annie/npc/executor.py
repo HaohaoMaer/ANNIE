@@ -9,32 +9,30 @@ SystemMessage + rolling history turns + current task), then runs:
         messages.append(ai)
         if not ai.tool_calls: break               # final answer
         for call in ai.tool_calls:
-            result = ToolAgent.dispatch(call, ctx)   # Micro-compressed
+            result = ToolDispatcher.dispatch(call, ctx)   # Micro-compressed
             messages.append(ToolMessage(result, tool_call_id=call.id))
 
-Skills are frozen in this change (see D7); the <available_skills/> XML
-section is emitted as a placeholder with no names.
+Skills are exposed by the run-local SkillRuntime and activated through the
+``use_skill`` built-in tool.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+import json
 import logging
-import re
 from typing import TYPE_CHECKING, Any
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
-    HumanMessage,
-    SystemMessage,
     ToolMessage,
 )
 
 from annie.npc.prompts import (
-    MEMORY_CATEGORIES_BLOCK,
-    render_identity,
-    render_skills_text,
+    EXECUTOR_SYSTEM_PROMPT,
+    build_executor_messages,
 )
 from annie.npc.state import AgentState, Task, TaskStatus
 from annie.npc.tracing import EventType
@@ -42,49 +40,33 @@ from annie.npc.tracing import EventType
 SKIP_TASK_MARKER = "__skip__"
 
 if TYPE_CHECKING:
-    from annie.npc.sub_agents.tool_agent import ToolAgent
+    from annie.npc.runtime.tool_dispatcher import ToolDispatcher
 
 logger = logging.getLogger(__name__)
 
 MAX_TOOL_LOOPS: int = 8
 
-EXECUTOR_SYSTEM_TEMPLATE = """\
-{identity}
-<world_rules>
-{world_rules}
-</world_rules>
-<situation>
-{situation}
-</situation>
-<memory_categories>
-{memory_categories}
-</memory_categories>
-<working_memory>
-{working_memory}
-</working_memory>
-<todo>
-{todo}
-</todo>
-<available_skills>
-{skills}
-</available_skills>
+EXECUTOR_SYSTEM_TEMPLATE = EXECUTOR_SYSTEM_PROMPT
 
-You are acting as this NPC. Respond in-character. You may call the tools
-listed in this turn's tool schema to ground your answer; when you have
-everything you need, produce a final in-character reply with no further
-tool calls.
-"""
+
+@dataclass
+class LoopResult:
+    final_ai: AIMessage | None
+    exhausted: bool = False
+    productive_effect: bool = False
+    failure_reason: str | None = None
+    pending_action: bool = False
 
 
 class Executor:
     def __init__(
         self,
         llm: BaseChatModel,
-        tool_agent: "ToolAgent",
+        tool_dispatcher: "ToolDispatcher",
         max_loops: int = MAX_TOOL_LOOPS,
     ):
         self.llm = llm
-        self.tool_agent = tool_agent
+        self.tool_dispatcher = tool_dispatcher
         self.max_loops = max_loops
 
     # ------------------------------------------------------------------
@@ -95,33 +77,63 @@ class Executor:
         budget = state.get("context_budget")
         working_memory = state.get("working_memory", "")
         todo_text = state.get("todo_list_text", "")
+        runtime = state.get("runtime", {})
 
         span = tracer.node_span("executor") if tracer else _nullcontext()
         with span:
             all_messages: list[BaseMessage] = []
             results: list[dict[str, Any]] = []
             updated_tasks: list[Task] = []
+            prior_results: list[dict[str, Any]] = []
 
             for task in tasks:
                 task.status = TaskStatus.IN_PROGRESS
-                messages = self._initial_messages(ctx, task, working_memory, todo_text)
-                final_ai = self._run_loop(messages, ctx, budget, tracer)
+                messages = self._initial_messages(
+                    ctx,
+                    task,
+                    working_memory,
+                    todo_text,
+                    prior_results_text=_render_prior_results(prior_results),
+                )
+                action_results_baseline = len(runtime.get("action_results") or [])
+                loop_result = self._run_loop(messages, ctx, budget, tracer, runtime)
+                final_ai = loop_result.final_ai
 
-                task.status = TaskStatus.DONE
                 content = _to_text(final_ai.content) if final_ai is not None else ""
-                task.result = content
+                if loop_result.exhausted:
+                    task.status = TaskStatus.FAILED
+                    task.result = loop_result.failure_reason or "executor reached max tool loops"
+                elif not content.strip() and not loop_result.productive_effect:
+                    task.status = TaskStatus.FAILED
+                    task.result = "executor produced empty final answer"
+                else:
+                    task.status = TaskStatus.DONE
+                    task.result = content
                 updated_tasks.append(task)
-                results.append({
-                    "task_id": task.id,
-                    "task_description": task.description,
-                    "action": content,
-                })
+                if task.status == TaskStatus.DONE:
+                    result: dict[str, Any] = {
+                        "task_id": task.id,
+                        "task_description": task.description,
+                        "action": content,
+                    }
+                    action_results = runtime.get("action_results") or []
+                    task_action_results = action_results[action_results_baseline:]
+                    if task_action_results:
+                        result["action_results"] = [
+                            r.model_dump() if hasattr(r, "model_dump") else r
+                            for r in task_action_results
+                        ]
+                    results.append(result)
+                    prior_results.append(result)
                 all_messages.extend(messages)
+                if loop_result.pending_action:
+                    break
 
         return {
             "tasks": updated_tasks,
             "execution_results": results,
             "messages": all_messages,
+            "runtime": runtime,
         }
 
     # ---- loop internals ------------------------------------------------
@@ -131,19 +143,23 @@ class Executor:
         ctx: Any,
         budget: Any,
         tracer: Any,
-    ) -> AIMessage | None:
-        tool_registry = self.tool_agent.tool_registry
+        runtime: dict[str, Any],
+    ) -> LoopResult:
+        tool_registry = self.tool_dispatcher.tool_registry
+        self.tool_dispatcher.runtime = runtime
 
         # Expose the running message list and tool registry to the use_skill
         # built-in so it can mutate both when activating a skill.
-        extra = getattr(ctx, "extra", {})
-        prev_messages = extra.get("_messages")
-        extra["_messages"] = messages
-        extra.setdefault("_tool_registry", tool_registry)
+        prev_messages = runtime.get("messages")
+        runtime["messages"] = messages
+        runtime.setdefault("tool_registry", tool_registry)
         frames_before = len(getattr(tool_registry, "_frames", []))
-        extra["_skill_frames"] = []
+        runtime["skill_frames"] = []
 
         last_ai: AIMessage | None = None
+        productive_effect_baseline = _runtime_productive_effect_counts(runtime)
+        pending_action_baseline = len(runtime.get("pending_action_ids") or [])
+        productive_effect = False
         try:
             for step in range(self.max_loops):
                 if budget is not None:
@@ -178,7 +194,16 @@ class Executor:
 
                 tool_calls = getattr(response, "tool_calls", None) or []
                 if not tool_calls:
-                    return response
+                    return LoopResult(
+                        final_ai=response,
+                        productive_effect=(
+                            productive_effect
+                            or _has_runtime_productive_effect(
+                                runtime,
+                                productive_effect_baseline,
+                            )
+                        ),
+                    )
 
                 for call in tool_calls:
                     name = call.get("name", "")
@@ -187,29 +212,50 @@ class Executor:
                         tracer.trace(
                             "executor", EventType.TOOL_INVOKE,
                             output_summary=f"tool={name}", metadata={"tool": name},
+                    )
+                    tool = tool_registry.get(name)
+                    result = self.tool_dispatcher.dispatch(call, ctx)
+                    productive_effect = (
+                        productive_effect
+                        or _has_runtime_productive_effect(
+                            runtime,
+                            productive_effect_baseline,
                         )
-                    result = self.tool_agent.dispatch(call, ctx)
+                    )
+                    if _tool_has_productive_effect(tool, name):
+                        productive_effect = True
                     messages.append(ToolMessage(content=result, tool_call_id=call_id))
+                    if len(runtime.get("pending_action_ids") or []) > pending_action_baseline:
+                        return LoopResult(
+                            final_ai=AIMessage(content=""),
+                            productive_effect=True,
+                            pending_action=True,
+                        )
 
             logger.warning(
                 "Executor: hit MAX_TOOL_LOOPS=%d without a final answer",
                 self.max_loops,
             )
-            return last_ai
+            return LoopResult(
+                final_ai=last_ai,
+                exhausted=True,
+                productive_effect=productive_effect,
+                failure_reason=f"executor reached MAX_TOOL_LOOPS={self.max_loops}",
+            )
         finally:
             # Pop any skill frames this task activated so their extra_tools
             # do not leak into subsequent tasks.
-            for frame_id in reversed(extra.get("_skill_frames", [])):
+            for frame_id in reversed(runtime.get("skill_frames", [])):
                 tool_registry.pop_frame(frame_id)
             # Safety net: if something skipped frame-id tracking, unwind any
             # residual frames pushed during this loop.
             while len(getattr(tool_registry, "_frames", [])) > frames_before:
                 tool_registry.pop_frame()
-            extra["_skill_frames"] = []
+            runtime["skill_frames"] = []
             if prev_messages is None:
-                extra.pop("_messages", None)
+                runtime.pop("messages", None)
             else:
-                extra["_messages"] = prev_messages
+                runtime["messages"] = prev_messages
 
     # ---- message assembly ----------------------------------------------
     def _initial_messages(
@@ -218,45 +264,27 @@ class Executor:
         task: Task,
         working_memory: str = "",
         todo_text: str = "",
+        prior_results_text: str = "",
     ) -> list[BaseMessage]:
-        world_rules = getattr(ctx, "world_rules", "") or ""
-        situation = getattr(ctx, "situation", "") or ""
-        history = getattr(ctx, "history", "") or ""
-        input_event = getattr(ctx, "input_event", "") or ""
-        npc_id = getattr(ctx, "npc_id", "") or ""
-
-        # Merge AgentContext.skills with any skills the running SkillAgent
-        # exposes via extra["_skill_agent"] (global registry union, context wins).
+        # Merge AgentContext.skills with any skills the running SkillRuntime
+        # exposes via run-local state (global registry union, context wins).
         ctx_skills = list(getattr(ctx, "skills", []) or [])
         by_name = {s.name: s for s in ctx_skills}
-        extra = getattr(ctx, "extra", {}) or {}
-        skill_agent = extra.get("_skill_agent")
-        if skill_agent is not None:
-            for s in skill_agent.skill_registry.list_skills():
+        dispatcher_runtime = getattr(self.tool_dispatcher, "runtime", {})
+        skill_runtime = dispatcher_runtime.get("skill_runtime")
+        if skill_runtime is not None:
+            for s in skill_runtime.skill_registry.list_skills():
                 by_name.setdefault(s.name, s)
-        skills_text = render_skills_text(list(by_name.values()))
-
-        system = SystemMessage(content=EXECUTOR_SYSTEM_TEMPLATE.format(
-            identity=render_identity(ctx),
-            world_rules=world_rules,
-            situation=situation,
-            memory_categories=MEMORY_CATEGORIES_BLOCK,
-            working_memory=working_memory.strip() or "(none)",
-            todo=todo_text.strip() or "(none)",
-            skills=skills_text,
-        ))
-
-        history_msgs = _history_to_messages(history, npc_id)
-
-        if task.description == SKIP_TASK_MARKER:
-            trigger_content = f"<input_event>{input_event}</input_event>"
-        else:
-            trigger_content = (
-                f"<input_event>{input_event}</input_event>\n"
-                f"<task>{task.description}</task>"
-            )
-        trigger = HumanMessage(content=trigger_content)
-        return [system, *history_msgs, trigger]
+        messages = build_executor_messages(
+            ctx,
+            task,
+            working_memory=working_memory,
+            todo_text=todo_text,
+            skills=list(by_name.values()),
+        )
+        if prior_results_text.strip():
+            _append_prior_results(messages, prior_results_text)
+        return messages
 
 
 # ----------------------------------------------------------------------
@@ -281,34 +309,52 @@ def _tool_to_schema(tool: Any) -> dict:
     }
 
 
-_HISTORY_LINE_RE = re.compile(r"^(\[folded\])?\[(?P<speaker>[^\]]+)\] (?P<content>.*)$")
+def _runtime_productive_effect_counts(runtime: dict[str, Any]) -> dict[str, int]:
+    return {
+        "actions": len(runtime.get("actions") or []),
+        "action_results": len(runtime.get("action_results") or []),
+        "memory_updates": len(runtime.get("memory_updates") or []),
+        "pending_action_ids": len(runtime.get("pending_action_ids") or []),
+    }
 
 
-def _history_to_messages(history: str, self_id: str) -> list[BaseMessage]:
-    """Parse the engine-rendered rolling history into a message sequence.
+def _has_runtime_productive_effect(runtime: dict[str, Any], baseline: dict[str, int]) -> bool:
+    return any(
+        len(runtime.get(key) or []) > baseline.get(key, 0)
+        for key in ("actions", "action_results", "memory_updates", "pending_action_ids")
+    )
 
-    The DefaultWorldEngine formats each entry as ``[speaker] content`` (with an
-    optional ``[folded]`` prefix). Entries whose speaker equals the NPC's own
-    ``npc_id`` become AIMessage; everything else becomes HumanMessage.
-    """
-    if not history.strip():
-        return []
-    msgs: list[BaseMessage] = []
-    for raw in history.splitlines():
-        line = raw.strip()
-        if not line:
-            continue
-        m = _HISTORY_LINE_RE.match(line)
-        if not m:
-            msgs.append(HumanMessage(content=line))
-            continue
-        speaker = m.group("speaker")
-        content = m.group("content")
-        if speaker == self_id:
-            msgs.append(AIMessage(content=content))
-        else:
-            msgs.append(HumanMessage(content=f"{speaker}: {content}"))
-    return msgs
+
+def _tool_has_productive_effect(tool: Any, name: str) -> bool:
+    if tool is None or getattr(tool, "is_read_only", True):
+        return False
+    return name != "use_skill"
+
+
+def _render_prior_results(results: list[dict[str, Any]]) -> str:
+    if not results:
+        return ""
+    compact = [
+        {
+            "task_description": r.get("task_description"),
+            "action": r.get("action"),
+            "action_results": r.get("action_results", []),
+        }
+        for r in results
+    ]
+    return json.dumps(compact, ensure_ascii=False, default=str)
+
+
+def _append_prior_results(messages: list[BaseMessage], prior_results_text: str) -> None:
+    content = (
+        "\n\n<prior_task_results>\n"
+        "本轮中较早任务的执行结果：\n"
+        f"{prior_results_text}\n"
+        "</prior_task_results>"
+    )
+    if not messages:
+        return
+    messages[-1].content = _to_text(messages[-1].content) + content
 
 
 class _nullcontext:

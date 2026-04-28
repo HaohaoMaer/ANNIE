@@ -12,8 +12,8 @@ from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
 
 from annie.npc.agent import NPCAgent
 from annie.npc.response import AgentResponse
-from annie.npc.state import NPCProfile
 from annie.world_engine import DefaultWorldEngine
+from annie.world_engine.profile import NPCProfile
 
 
 class _StubLLM:
@@ -51,11 +51,9 @@ def test_single_npc_single_run(tmp_path, tmp_chroma):
     we.register_profile("alice", NPCProfile(name="Alice"))
 
     llm = _StubLLM([
-        '{"skip": true, "reason": "simple event"}',
+        '{"decision":"skip","reason":"simple event","tasks":[]}',
         "Alice nods and greets the newcomer.",
-        "REFLECTION: Met someone new at the tavern.\n"
-        'FACTS: ["A newcomer arrived"]\n'
-        'RELATIONSHIP_NOTES: []',
+        '{"reflection":"Met someone new at the tavern.","facts":["A newcomer arrived"],"relationship_notes":[]}',
     ])
 
     ctx = we.build_context("alice", event="A stranger walks into the tavern.")
@@ -76,12 +74,13 @@ def test_single_npc_single_run(tmp_path, tmp_chroma):
     assert "<input_event>" in trigger
     assert "<task>" not in trigger
 
-    records = we.memory_for("alice").recall("newcomer", k=5)
-    assert records, "memory should contain reflection records"
+    assert response.memory_updates, "agent should return reflection memory updates"
 
     # handle_response must NOT write episodic records; the vector store holds
     # only distilled content (reflection, semantic, impression, todo).
     we.handle_response("alice", response)
+    records = we.memory_for("alice").recall("newcomer", k=5)
+    assert records, "world engine should persist reflection records from response"
     episodic_records = we.memory_for("alice").grep(
         "", category="episodic", k=50,
     )
@@ -105,10 +104,10 @@ def test_inner_monologue_tool_populates_agent_response(tmp_path, tmp_chroma):
     reply = AIMessage(content="Dora stares silently.")
 
     llm = _StubLLM([
-        '{"skip": true}',
+        '{"decision":"skip","reason":"simple event","tasks":[]}',
         think_call,
         reply,
-        "REFLECTION: pondered.\nFACTS: []\nRELATIONSHIP_NOTES: []",
+        '{"reflection":"pondered.","facts":[],"relationship_notes":[]}',
     ])
 
     ctx = we.build_context("dora", event="A stranger enters.")
@@ -133,10 +132,10 @@ def test_tool_use_loop_dispatches_tool(tmp_path, tmp_chroma):
     second_ai = AIMessage(content="Bob greets the newcomer warmly.")
 
     llm = _StubLLM([
-        '{"skip": true, "reason": "single step"}',  # planner
+        '{"decision":"skip","reason":"single step","tasks":[]}',  # planner
         first_ai,                                    # executor step 1 (tool call)
         second_ai,                                   # executor step 2 (final)
-        "REFLECTION: reflected.\nFACTS: []\nRELATIONSHIP_NOTES: []",  # reflector
+        '{"reflection":"reflected.","facts":[],"relationship_notes":[]}',  # reflector
     ])
 
     ctx = we.build_context("bob", event="Stranger arrives")
@@ -155,9 +154,9 @@ def test_rolling_history_is_injected_on_subsequent_run(tmp_path, tmp_chroma):
     we.register_profile("carol", NPCProfile(name="Carol"))
 
     llm = _StubLLM([
-        '{"skip": true}',
+        '{"decision":"skip","reason":"simple event","tasks":[]}',
         "Carol waves.",
-        "REFLECTION: waved.\nFACTS: []\nRELATIONSHIP_NOTES: []",
+        '{"reflection":"waved.","facts":[],"relationship_notes":[]}',
     ])
     ctx1 = we.build_context("carol", event="A friend appears.")
     agent = NPCAgent(llm=llm)
@@ -186,9 +185,9 @@ def test_available_skills_rendered_in_executor_system(tmp_path, tmp_chroma):
     we.register_profile("alice", NPCProfile(name="Alice"))
 
     llm = _StubLLM([
-        '{"skip": true}',
+        '{"decision":"skip","reason":"simple event","tasks":[]}',
         "Alice replies.",
-        "REFLECTION: test.\nFACTS: []\nRELATIONSHIP_NOTES: []",
+        '{"reflection":"test.","facts":[],"relationship_notes":[]}',
     ])
 
     ctx = we.build_context("alice", event="Anything.")
@@ -214,9 +213,9 @@ def test_todo_section_reflects_open_todos(tmp_path, tmp_chroma):
     )
 
     llm = _StubLLM([
-        '{"skip": true}',
+        '{"decision":"skip","reason":"simple event","tasks":[]}',
         "Eve looks around.",
-        "REFLECTION: test.\nFACTS: []\nRELATIONSHIP_NOTES: []",
+        '{"reflection":"test.","facts":[],"relationship_notes":[]}',
     ])
 
     ctx = we.build_context("eve", event="Something happens.")
@@ -259,11 +258,11 @@ def test_use_skill_appends_system_message(tmp_path, tmp_chroma):
     final_ai = AIMessage(content="Spy has gathered the intel.")
 
     llm = _StubLLM([
-        '{"skip": true}',  # planner
+        '{"decision":"skip","reason":"simple event","tasks":[]}',  # planner
         use_skill_ai,       # executor step 1: call use_skill
         recall_ai,          # executor step 2: call memory_recall (after skill activated)
         final_ai,           # executor step 3: final answer
-        "REFLECTION: spied.\nFACTS: []\nRELATIONSHIP_NOTES: []",
+        '{"reflection":"spied.","facts":[],"relationship_notes":[]}',
     ])
 
     ctx = we.build_context("spy_npc", event="Find out what's happening.")

@@ -38,6 +38,7 @@ class AgentContext(BaseModel):
     world_rules: str = ""
     situation: str = ""
     history: str = ""
+    todo: str = ""
 
     # ---- Open extension ------------------------------------------------
     extra: dict[str, Any] = Field(default_factory=dict)

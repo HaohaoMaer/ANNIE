@@ -59,10 +59,13 @@ def test_replace_collapses_turns(store: HistoryStore) -> None:
     store.replace([1, 2, 3], folded)
 
     all_entries = store.read_all()
-    assert len(all_entries) == 2
-    assert all_entries[0].is_folded is True
-    assert all_entries[0].folded_from == [1, 2, 3]
-    assert all_entries[1].content == "4"
+    assert len(all_entries) == 1
+    assert all_entries[0].content == "4"
+
+    raw_entries = store._read_all_raw()
+    assert len(raw_entries) == 2
+    assert raw_entries[0].is_folded is True
+    assert raw_entries[0].folded_from == [1, 2, 3]
 
 
 def test_replace_empty_is_noop(store: HistoryStore) -> None:

@@ -4,9 +4,9 @@ Reads model_config.yaml and provides typed configuration objects.
 """
 
 import os
+import importlib
 from pathlib import Path
 
-import yaml
 from pydantic import BaseModel, Field
 
 
@@ -64,6 +64,6 @@ def load_model_config(path: str | Path = "config/model_config.yaml") -> ModelCon
         raise FileNotFoundError(f"Config file not found: {path}")
 
     with open(path) as f:
-        raw = yaml.safe_load(f)
+        raw = importlib.import_module("yaml").safe_load(f)
 
     return ModelConfig(**raw)

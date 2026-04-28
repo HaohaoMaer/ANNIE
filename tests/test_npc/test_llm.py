@@ -1,5 +1,7 @@
 """Tests for LLM integration layer."""
 
+import os
+
 import pytest
 
 from annie.npc.config import load_model_config
@@ -39,6 +41,8 @@ class TestCreateEmbeddings:
 @pytest.mark.integration
 class TestLLMIntegration:
     def test_chat_model_responds(self, config):
+        if not os.environ.get("DEEPSEEK_API_KEY"):
+            pytest.skip("DEEPSEEK_API_KEY is required for live LLM integration")
         model = create_chat_model(config)
         response = model.invoke("Say hello in one word.")
         assert response.content

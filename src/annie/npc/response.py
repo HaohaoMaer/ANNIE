@@ -8,7 +8,8 @@ modifies, or rejects those intents.
 
 from __future__ import annotations
 
-from typing import Any
+import uuid
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -16,16 +17,24 @@ from pydantic import BaseModel, Field
 class ActionRequest(BaseModel):
     """An intent declaration — *not* a direct world mutation."""
 
+    action_id: str = Field(default_factory=lambda: uuid.uuid4().hex[:8])
     type: str = Field(..., description="Verb-style action label (e.g. 'move', 'give', 'attack').")
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
-class MemoryUpdate(BaseModel):
-    """Optional memory write intent for the world engine to arbitrate.
+class ActionResult(BaseModel):
+    """Structured result returned by the world engine after attempting an action."""
 
-    If Executor wrote through a memory_store Tool during the run, that write
-    is already committed and need not be repeated here.
-    """
+    action_id: str
+    action_type: str
+    status: Literal["succeeded", "failed", "partial", "deferred"]
+    reason: str | None = None
+    observation: str = ""
+    facts: dict[str, Any] = Field(default_factory=dict)
+
+
+class MemoryUpdate(BaseModel):
+    """Declarative memory write intent for the world engine to arbitrate."""
 
     content: str
     type: str = "semantic"

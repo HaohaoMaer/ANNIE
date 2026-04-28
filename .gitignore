@@ -11,6 +11,7 @@ build/
 
 # Vector store data
 data/vector_store/
+data/**/vector_store/
 
 # IDE
 .vscode/
@@ -48,6 +49,14 @@ node_modules/
 tsconfig.tsbuildinfo
 
 # Claude Code internal sources (not part of project)
-tools/
-skills/
-.claude/
+/tools/
+/skills/
+/.claude/
+
+# Codex/OpenSpec project instructions
+!.codex/
+!.codex/skills/
+!.codex/skills/**
+
+# External reference implementation copied locally
+GenerativeAgentsCN/

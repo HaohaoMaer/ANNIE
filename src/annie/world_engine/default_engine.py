@@ -24,8 +24,9 @@ from langchain_core.language_models import BaseChatModel
 
 from annie.npc.context import AgentContext
 from annie.npc.memory.interface import MemoryInterface
-from annie.npc.response import AgentResponse
-from annie.npc.state import NPCProfile, load_npc_profile
+from annie.npc.response import ActionRequest, ActionResult, AgentResponse
+from annie.world_engine.profile import NPCProfile, load_npc_profile, profile_to_character_prompt
+from annie.world_engine.tools import PlanTodoTool, WorldActionTool, render_todo_text
 from annie.world_engine.base import WorldEngine
 from annie.world_engine.compressor import Compressor
 from annie.world_engine.history import HistoryStore
@@ -35,23 +36,6 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_HISTORY_DIR = Path("./data/history")
 MAX_HISTORY_TURNS: int = 20
-
-
-def _profile_to_character_prompt(profile: NPCProfile) -> str:
-    parts: list[str] = [f"Name: {profile.name}"]
-    if profile.personality.traits:
-        parts.append("Traits: " + ", ".join(profile.personality.traits))
-    if profile.personality.values:
-        parts.append("Values: " + ", ".join(profile.personality.values))
-    if profile.background.biography:
-        parts.append(f"Biography: {profile.background.biography}")
-    if profile.background.past_events:
-        parts.append("Past events:\n" + "\n".join(f"- {e}" for e in profile.background.past_events))
-    if profile.goals.short_term:
-        parts.append("Short-term goals:\n" + "\n".join(f"- {g}" for g in profile.goals.short_term))
-    if profile.goals.long_term:
-        parts.append("Long-term goals:\n" + "\n".join(f"- {g}" for g in profile.goals.long_term))
-    return "\n\n".join(parts)
 
 
 class DefaultWorldEngine(WorldEngine):
@@ -75,6 +59,8 @@ class DefaultWorldEngine(WorldEngine):
         self._situation: str = ""
         self._history_dir = Path(history_dir) if history_dir else _DEFAULT_HISTORY_DIR
         self._llm = llm
+        self._locations: dict[str, str] = {}
+        self._exits: dict[str, set[str]] = {}
 
         for npc_id, path in (npc_yaml_paths or {}).items():
             self._profiles[npc_id] = load_npc_profile(path)
@@ -82,18 +68,20 @@ class DefaultWorldEngine(WorldEngine):
     # ---- WorldEngine contract -----------------------------------------
     def build_context(self, npc_id: str, event: str) -> AgentContext:
         profile = self._profiles.get(npc_id)
-        character_prompt = _profile_to_character_prompt(profile) if profile else ""
+        memory = self.memory_for(npc_id)
+        character_prompt = profile_to_character_prompt(profile) if profile else ""
         history_text = self._render_history(npc_id)
         return AgentContext(
             npc_id=npc_id,
             input_event=event,
-            tools=[],
+            tools=[PlanTodoTool(), WorldActionTool(npc_id, self.execute_action)],
             skills=[],
-            memory=self.memory_for(npc_id),
+            memory=memory,
             character_prompt=character_prompt,
             world_rules=self._world_rules,
             situation=self._situation,
             history=history_text,
+            todo=render_todo_text(memory),
             extra={},
         )
 
@@ -104,6 +92,14 @@ class DefaultWorldEngine(WorldEngine):
         if response.dialogue and history is not None:
             history.append(speaker=npc_id, content=response.dialogue)
 
+        memory = self.memory_for(npc_id)
+        for update in response.memory_updates:
+            memory.remember(
+                update.content,
+                category=update.type,
+                metadata=update.metadata,
+            )
+
         compressor = self.compressor_for(npc_id)
         if compressor is not None:
             compressor.maybe_fold(scene=self._situation or None)
@@ -112,6 +108,20 @@ class DefaultWorldEngine(WorldEngine):
             "DefaultWorldEngine received response from %s: %d actions, reflection=%s",
             npc_id, len(response.actions), bool(response.reflection),
         )
+
+    def execute_action(self, npc_id: str, action: ActionRequest) -> ActionResult:
+        if action.type == "move":
+            return self._execute_move(npc_id, action)
+        if action.type == "inspect":
+            target = str(action.payload.get("target", "the area"))
+            return ActionResult(
+                action_id=action.action_id,
+                action_type=action.type,
+                status="succeeded",
+                observation=f"{npc_id} inspects {target}.",
+                facts={"target": target},
+            )
+        return super().execute_action(npc_id, action)
 
     def memory_for(self, npc_id: str) -> MemoryInterface:
         if npc_id not in self._memories:
@@ -158,6 +168,12 @@ class DefaultWorldEngine(WorldEngine):
     def set_situation(self, text: str) -> None:
         self._situation = text
 
+    def set_location(self, npc_id: str, location: str) -> None:
+        self._locations[npc_id] = location
+
+    def set_exits(self, location: str, exits: list[str]) -> None:
+        self._exits[location] = set(exits)
+
     def register_profile(self, npc_id: str, profile: NPCProfile) -> None:
         self._profiles[npc_id] = profile
 
@@ -167,3 +183,60 @@ class DefaultWorldEngine(WorldEngine):
 
     def extra_for(self, npc_id: str) -> dict[str, Any]:  # pragma: no cover - hook
         return {}
+
+    def _execute_move(self, npc_id: str, action: ActionRequest) -> ActionResult:
+        target = action.payload.get("to")
+        if not isinstance(target, str) or not target:
+            return ActionResult(
+                action_id=action.action_id,
+                action_type=action.type,
+                status="failed",
+                reason="invalid_payload",
+                observation="Move requires a non-empty 'to' location.",
+            )
+
+        current = self._locations.get(npc_id)
+        if current is None:
+            return ActionResult(
+                action_id=action.action_id,
+                action_type=action.type,
+                status="failed",
+                reason="unknown_current_location",
+                observation=f"{npc_id}'s current location is unknown.",
+                facts={"to": target},
+            )
+
+        if target == current:
+            return ActionResult(
+                action_id=action.action_id,
+                action_type=action.type,
+                status="succeeded",
+                reason="already_at_destination",
+                observation=f"{npc_id} is already at {target}.",
+                facts={
+                    "from": current,
+                    "to": target,
+                    "reachable": sorted(self._exits.get(current, set())),
+                },
+            )
+
+        reachable = sorted(self._exits.get(current, set()))
+        if target not in reachable:
+            return ActionResult(
+                action_id=action.action_id,
+                action_type=action.type,
+                status="failed",
+                reason="unreachable",
+                observation=f"{target} is not directly reachable from {current}.",
+                facts={"from": current, "to": target, "reachable": reachable},
+            )
+
+        self._locations[npc_id] = target
+        reachable_from_target = sorted(self._exits.get(target, set()))
+        return ActionResult(
+            action_id=action.action_id,
+            action_type=action.type,
+            status="succeeded",
+            observation=f"{npc_id} moved from {current} to {target}.",
+            facts={"from": current, "to": target, "reachable": reachable_from_target},
+        )

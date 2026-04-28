@@ -19,7 +19,7 @@ The four compressors at a glance
 ---------------------------------
 * ``Compressor`` (this file) — cross-run, writes impression to vector DB.
 * ``ContextBudget``           — single Executor loop, in-memory summary msg.
-* ``ToolAgent.micro``         — single ToolMessage truncation, in-memory.
+* ``ToolDispatcher.micro``    — single ToolMessage truncation, in-memory.
 * ``HistoryStore.prune``      — permanent JSONL row deletion, no vector write.
 """
 

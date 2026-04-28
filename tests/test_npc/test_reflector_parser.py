@@ -3,6 +3,28 @@
 from __future__ import annotations
 
 from annie.npc.reflector import _parse_list, _parse_rel_notes
+from annie.npc.reflector import Reflector
+
+
+def test_reflector_parse_json_contract():
+    raw = (
+        '{"reflection":"I noticed a useful detail.",'
+        '"facts":["A key was missing"],'
+        '"relationship_notes":[{"person":"李四","observation":"李四 avoided eye contact."}]}'
+    )
+    reflection, facts, notes = Reflector(llm=object())._parse_response(raw)
+    assert reflection == "I noticed a useful detail."
+    assert facts == ["A key was missing"]
+    assert notes == [{"person": "李四", "observation": "李四 avoided eye contact."}]
+
+
+def test_reflector_invalid_json_has_no_structured_updates():
+    reflection, facts, notes = Reflector(llm=object())._parse_response(
+        "REFLECTION: old text\nFACTS: [\"ignored\"]"
+    )
+    assert reflection == "old text"
+    assert facts == []
+    assert notes == []
 
 
 def test_parse_list_json_array():

@@ -10,7 +10,7 @@ import logging
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
     from annie.npc.context import AgentContext
@@ -28,6 +28,7 @@ class ToolContext(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
 
     agent_context: "AgentContext"
+    runtime: dict[str, Any] = Field(default_factory=dict)
 
 
 class ToolDef(ABC):

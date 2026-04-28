@@ -12,8 +12,8 @@ import pytest
 from langchain_core.messages import AIMessage, BaseMessage
 
 from annie.npc.agent import NPCAgent
-from annie.npc.state import NPCProfile
 from annie.world_engine import DefaultWorldEngine
+from annie.world_engine.profile import NPCProfile
 
 
 class _StubLLM:
@@ -57,10 +57,10 @@ def test_todo_persists_across_runs(tmp_path, tmp_chroma):
         }],
     )
     llm1 = _StubLLM([
-        '{"skip": true}',  # planner
+        '{"decision":"skip","reason":"simple event","tasks":[]}',  # planner
         add_todo_ai,        # executor: add todo
         "NPC1 nods.",       # executor: final answer
-        "REFLECTION: r1.\nFACTS: []\nRELATIONSHIP_NOTES: []",
+        '{"reflection":"r1.","facts":[],"relationship_notes":[]}',
     ])
     ctx1 = we.build_context("npc1", event="Event 1.")
     resp1 = NPCAgent(llm=llm1).run(ctx1)
@@ -84,10 +84,10 @@ def test_todo_persists_across_runs(tmp_path, tmp_chroma):
         }],
     )
     llm2 = _StubLLM([
-        '{"skip": true}',
+        '{"decision":"skip","reason":"simple event","tasks":[]}',
         complete_todo_ai,
         "NPC1 found the dagger.",
-        "REFLECTION: r2.\nFACTS: []\nRELATIONSHIP_NOTES: []",
+        '{"reflection":"r2.","facts":[],"relationship_notes":[]}',
     ])
     ctx2 = we.build_context("npc1", event="Event 2.")
     resp2 = NPCAgent(llm=llm2).run(ctx2)
@@ -103,9 +103,9 @@ def test_todo_persists_across_runs(tmp_path, tmp_chroma):
     # ------------------------------------------------------------------ Run 3
     # After completion, <todo> should be (none).
     llm3 = _StubLLM([
-        '{"skip": true}',
+        '{"decision":"skip","reason":"simple event","tasks":[]}',
         "NPC1 relaxes.",
-        "REFLECTION: r3.\nFACTS: []\nRELATIONSHIP_NOTES: []",
+        '{"reflection":"r3.","facts":[],"relationship_notes":[]}',
     ])
     ctx3 = we.build_context("npc1", event="Event 3.")
     NPCAgent(llm=llm3).run(ctx3)

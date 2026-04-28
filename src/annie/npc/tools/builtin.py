@@ -1,28 +1,28 @@
 """Built-in NPC Agent tools.
 
-Three universal tools every world engine gets for free:
+Universal tools every world engine gets for free:
 
 * ``memory_recall`` — MemoryInterface.recall wrapper (category list filter)
-* ``memory_store`` — MemoryInterface.remember wrapper
+* ``memory_store`` — declare a MemoryUpdate; it does not persist directly
+* ``declare_action`` — declare an ActionRequest
+* ``request_action`` — submit a deferred world action and pause this run
 * ``inner_monologue`` — lets the LLM emit non-dialogue reasoning
 
-All built-ins follow the ToolDef contract and reach MemoryInterface via
-``ToolContext.agent_context.memory`` (never via ctor injection).
+All built-ins follow the ToolDef contract and receive run-local storage via
+``ToolContext.runtime``. Direct world mutation remains the World Engine's job.
 """
 
 from __future__ import annotations
 
-import uuid
-from datetime import UTC, datetime
-from typing import Any, Literal, TypeVar, cast
+from typing import Any, TypeVar, cast
 
 from pydantic import BaseModel, Field
 
 from annie.npc.memory.interface import (
     MEMORY_CATEGORY_SEMANTIC,
-    MEMORY_CATEGORY_TODO,
     MemoryRecord,
 )
+from annie.npc.response import ActionRequest, MemoryUpdate
 from annie.npc.tools.base_tool import ToolContext, ToolDef
 
 _T = TypeVar("_T", bound=BaseModel)
@@ -40,11 +40,11 @@ def _dedup_filter(
 ) -> list[MemoryRecord]:
     """Filter out records already shown in <working_memory> this run.
 
-    Uses ``extra["_recall_seen_ids"]`` (a ``set[str]`` of content strings).
+    Uses ``runtime["recall_seen_ids"]`` (a ``set[str]`` of content strings).
     New records are added to the set so subsequent calls won't return them.
     If the key is absent (e.g. unit tests without agent scaffolding), pass through.
     """
-    seen: set[str] | None = extra.get("_recall_seen_ids")
+    seen: set[str] | None = extra.get("recall_seen_ids")
     if seen is None:
         return records
     out: list[MemoryRecord] = []
@@ -76,7 +76,7 @@ class MemoryRecallTool(ToolDef):
         records = ctx.agent_context.memory.recall(
             inp.query, categories=inp.categories, k=inp.k,
         )
-        records = _dedup_filter(records, ctx.agent_context.extra)
+        records = _dedup_filter(records, ctx.runtime)
         return {
             "query": inp.query,
             "records": [r.model_dump() for r in records],
@@ -114,7 +114,7 @@ class MemoryGrepTool(ToolDef):
             metadata_filters=inp.metadata_filters,
             k=inp.k,
         )
-        records = _dedup_filter(records, ctx.agent_context.extra)
+        records = _dedup_filter(records, ctx.runtime)
         return {
             "pattern": inp.pattern,
             "records": [r.model_dump() for r in records],
@@ -129,16 +129,59 @@ class MemoryStoreInput(BaseModel):
 
 class MemoryStoreTool(ToolDef):
     name = "memory_store"
-    description = "Persist a new long-term memory entry for this NPC."
+    description = "Declare a long-term memory update for the world engine to arbitrate."
     input_schema = MemoryStoreInput
     is_read_only = False
 
     def call(self, input: BaseModel | dict, ctx: ToolContext) -> Any:
         inp = _coerce(input, MemoryStoreInput)
-        ctx.agent_context.memory.remember(
-            inp.content, category=inp.category, metadata=inp.metadata,
+        update = MemoryUpdate(
+            content=inp.content,
+            type=inp.category,
+            metadata=inp.metadata,
         )
-        return {"stored": True, "category": inp.category}
+        ctx.runtime.setdefault("memory_updates", []).append(update)
+        return {"declared": True, "category": inp.category}
+
+
+class DeclareActionInput(BaseModel):
+    type: str = Field(..., description="Verb-style action label, e.g. move, give, attack.")
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class DeclareActionTool(ToolDef):
+    name = "declare_action"
+    description = "Declare a world action intent for the world engine to arbitrate."
+    input_schema = DeclareActionInput
+    is_read_only = False
+
+    def call(self, input: BaseModel | dict, ctx: ToolContext) -> Any:
+        inp = _coerce(input, DeclareActionInput)
+        action = ActionRequest(type=inp.type, payload=inp.payload)
+        ctx.runtime.setdefault("actions", []).append(action)
+        return {"declared": True, "action": action.model_dump()}
+
+
+class RequestActionTool(ToolDef):
+    name = "request_action"
+    description = (
+        "Submit one deferred world action and pause this run. Use world_action "
+        "instead when you need an immediate observation inside the current "
+        "Executor loop."
+    )
+    input_schema = DeclareActionInput
+    is_read_only = False
+
+    def call(self, input: BaseModel | dict, ctx: ToolContext) -> Any:
+        inp = _coerce(input, DeclareActionInput)
+        action = ActionRequest(type=inp.type, payload=inp.payload)
+        ctx.runtime.setdefault("actions", []).append(action)
+        ctx.runtime.setdefault("pending_action_ids", []).append(action.action_id)
+        return {
+            "requested": True,
+            "action": action.model_dump(),
+            "observation_pending": True,
+        }
 
 
 class UseSkillInput(BaseModel):
@@ -161,22 +204,22 @@ class UseSkillTool(ToolDef):
 
     def call(self, input: BaseModel | dict, ctx: ToolContext) -> Any:
         inp = _coerce(input, UseSkillInput)
-        extra = ctx.agent_context.extra
-        skill_agent = extra.get("_skill_agent")
-        tool_registry = extra.get("_tool_registry")
-        messages = extra.get("_messages")
-        if skill_agent is None or tool_registry is None or messages is None:
+        runtime = ctx.runtime
+        skill_runtime = runtime.get("skill_runtime")
+        tool_registry = runtime.get("tool_registry")
+        messages = runtime.get("messages")
+        if skill_runtime is None or tool_registry is None or messages is None:
             return {
                 "activated": False,
                 "error": "use_skill invoked outside an Executor tool loop",
             }
         try:
-            frame_id = skill_agent.activate(
+            frame_id = skill_runtime.activate(
                 inp.skill_name, inp.args, messages, tool_registry,
             )
         except ValueError as e:
             return {"activated": False, "error": str(e)}
-        extra.setdefault("_skill_frames", []).append(frame_id)
+        runtime.setdefault("skill_frames", []).append(frame_id)
         return {
             "activated": True,
             "skill": inp.skill_name,
@@ -198,106 +241,9 @@ class InnerMonologueTool(ToolDef):
 
     def call(self, input: BaseModel | dict, ctx: ToolContext) -> Any:
         inp = _coerce(input, InnerMonologueInput)
-        thoughts = ctx.agent_context.extra.setdefault("_inner_thoughts", [])
+        thoughts = ctx.runtime.setdefault("inner_thoughts", [])
         thoughts.append(inp.thought)
         return {"thought": inp.thought}
-
-
-class PlanTodoInput(BaseModel):
-    op: Literal["add", "complete", "list"] = Field(
-        ..., description="Operation: add a new todo, complete by id, or list open todos.",
-    )
-    content: str | None = Field(
-        None, description="Todo content (required for op='add').",
-    )
-    todo_id: str | None = Field(
-        None, description="Target todo id (required for op='complete').",
-    )
-
-
-class PlanTodoTool(ToolDef):
-    name = "plan_todo"
-    description = (
-        "Manage cross-run goals as category='todo' memories. "
-        "'add' creates a new open todo (returns todo_id). "
-        "'complete' closes a todo by id. "
-        "'list' returns all currently-open todos."
-    )
-    input_schema = PlanTodoInput
-    is_read_only = False
-
-    def call(self, input: BaseModel | dict, ctx: ToolContext) -> Any:
-        inp = _coerce(input, PlanTodoInput)
-        memory = ctx.agent_context.memory
-
-        if inp.op == "add":
-            if not inp.content:
-                return {"success": False, "error": "content required for op='add'"}
-            todo_id = uuid.uuid4().hex[:8]
-            created_at = datetime.now(UTC).isoformat()
-            memory.remember(
-                inp.content,
-                category=MEMORY_CATEGORY_TODO,
-                metadata={"status": "open", "todo_id": todo_id, "created_at": created_at},
-            )
-            return {"success": True, "op": "add", "todo_id": todo_id}
-
-        if inp.op == "complete":
-            if not inp.todo_id:
-                return {"success": False, "error": "todo_id required for op='complete'"}
-            # Verify: open record exists.
-            existing = memory.grep(
-                "",
-                category=MEMORY_CATEGORY_TODO,
-                metadata_filters={"todo_id": inp.todo_id, "status": "open"},
-                k=1,
-            )
-            if not existing:
-                return {
-                    "success": False,
-                    "error": f"todo '{inp.todo_id}' not found or already closed",
-                }
-            # Verify: no closed record already recorded (event-stream model).
-            already_closed = memory.grep(
-                "",
-                category=MEMORY_CATEGORY_TODO,
-                metadata_filters={"closes": inp.todo_id, "status": "closed"},
-                k=1,
-            )
-            if already_closed:
-                return {
-                    "success": False,
-                    "error": f"todo '{inp.todo_id}' not found or already closed",
-                }
-            memory.remember(
-                f"[DONE] {inp.todo_id}",
-                category=MEMORY_CATEGORY_TODO,
-                metadata={"status": "closed", "closes": inp.todo_id},
-            )
-            return {"success": True, "op": "complete", "todo_id": inp.todo_id}
-
-        # op == "list"
-        opens = memory.grep(
-            "", category=MEMORY_CATEGORY_TODO,
-            metadata_filters={"status": "open"}, k=50,
-        )
-        closeds = memory.grep(
-            "", category=MEMORY_CATEGORY_TODO,
-            metadata_filters={"status": "closed"}, k=50,
-        )
-        closed_ids = {r.metadata.get("closes") for r in closeds}
-        alive = [
-            {
-                "todo_id": r.metadata.get("todo_id"),
-                "content": r.content,
-                "timestamp": r.metadata.get("created_at", "?"),
-            }
-            for r in opens
-            if r.metadata.get("todo_id") not in closed_ids
-        ]
-        # Newest first: sort by timestamp descending (ISO8601 sorts lexicographically).
-        alive.sort(key=lambda t: t["timestamp"], reverse=True)
-        return {"success": True, "op": "list", "todos": alive}
 
 
 def default_builtin_tools() -> list[ToolDef]:
@@ -306,7 +252,8 @@ def default_builtin_tools() -> list[ToolDef]:
         MemoryRecallTool(),
         MemoryGrepTool(),
         MemoryStoreTool(),
+        DeclareActionTool(),
+        RequestActionTool(),
         InnerMonologueTool(),
         UseSkillTool(),
-        PlanTodoTool(),
     ]

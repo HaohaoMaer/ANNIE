@@ -36,13 +36,13 @@ def test_default_builtin_tools_includes_memory_grep():
 
 def test_memory_grep_roundtrip():
     fake = _FakeMemory([
-        MemoryRecord(content="李四在餐车", category="episodic", relevance_score=1.0),
+        MemoryRecord(content="李四在餐车", category="semantic", relevance_score=1.0),
     ])
     agent_ctx = AgentContext(npc_id="x", input_event="e", memory=fake)
     ctx = ToolContext(agent_context=agent_ctx)
     tool = MemoryGrepTool()
     result = tool.safe_call(
-        {"pattern": "李四", "category": "episodic", "k": 10}, ctx,
+        {"pattern": "李四", "category": "semantic", "k": 10}, ctx,
     )
     assert result["success"] is True
     assert result["tool"] == "memory_grep"
@@ -50,7 +50,7 @@ def test_memory_grep_roundtrip():
     assert len(result["result"]["records"]) == 1
     assert fake.last_call == {
         "pattern": "李四",
-        "category": "episodic",
+        "category": "semantic",
         "metadata_filters": None,
         "k": 10,
     }

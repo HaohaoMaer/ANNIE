@@ -19,15 +19,12 @@ from annie.npc.context import AgentContext
 from annie.npc.context_budget import ContextBudget
 from annie.npc.executor import SKIP_TASK_MARKER, Executor
 from annie.npc.planner import Planner
-from annie.npc.prompts import render_todo_text
 from annie.npc.reflector import Reflector
 from annie.npc.response import AgentResponse
 from annie.npc.state import AgentState, Task, TaskStatus
 from annie.npc.skills.base_skill import SkillRegistry
 from annie.npc.skills.registry import load_dir as load_skill_dir
-from annie.npc.sub_agents.memory_agent import MemoryAgent
-from annie.npc.sub_agents.skill_agent import SkillAgent
-from annie.npc.sub_agents.tool_agent import ToolAgent
+from annie.npc.runtime import MemoryContextBuilder, SkillRuntime, ToolDispatcher
 from annie.npc.tools.tool_registry import ToolRegistry
 from annie.npc.tracing import Tracer
 
@@ -59,9 +56,19 @@ class NPCAgent:
         """Run a full Planner→Executor→Reflector cycle for a single NPC."""
         tracer = Tracer(agent_name=context.npc_id)
 
-        memory_agent = MemoryAgent(context.memory)
+        memory_context = MemoryContextBuilder(context.memory)
         tool_registry = ToolRegistry(injected=list(context.tools))
-        tool_agent = ToolAgent(tool_registry)
+        runtime: dict = {
+            "tool_registry": tool_registry,
+            "recall_seen_ids": set(),
+            "inner_thoughts": [],
+            "memory_updates": [],
+            "actions": [],
+            "action_results": [],
+            "pending_action_ids": [],
+            "skill_frames": [],
+        }
+        tool_dispatcher = ToolDispatcher(tool_registry, runtime=runtime)
 
         # Merge global skill registry with AgentContext.skills (context wins).
         run_skills = SkillRegistry()
@@ -69,22 +76,17 @@ class NPCAgent:
             run_skills.add(s)
         for s in context.skills:
             run_skills.add(s)
-        skill_agent = SkillAgent(run_skills)
+        skill_runtime = SkillRuntime(run_skills)
 
-        # Expose to the use_skill built-in via AgentContext.extra.
-        context.extra.setdefault("_skill_agent", skill_agent)
-        context.extra.setdefault("_tool_registry", tool_registry)
-        # Run-scoped recall dedup: records returned in <working_memory> won't
-        # appear again in tool responses for the duration of this run.
-        context.extra.setdefault("_recall_seen_ids", set())
+        runtime["skill_runtime"] = skill_runtime
 
         planner = Planner(self.llm)
-        executor = Executor(self.llm, tool_agent)
-        reflector = Reflector(self.llm, memory_agent)
+        executor = Executor(self.llm, tool_dispatcher)
+        reflector = Reflector(self.llm)
 
         graph = _build_graph(planner, executor, reflector)
 
-        seen_ids: set[str] = context.extra["_recall_seen_ids"]
+        seen_ids: set[str] = runtime["recall_seen_ids"]
 
         initial: AgentState = {
             "agent_context": context,
@@ -93,7 +95,7 @@ class NPCAgent:
             "current_task": None,
             "execution_results": [],
             "reflection": "",
-            "working_memory": memory_agent.build_context(context.input_event, seen_ids=seen_ids),
+            "working_memory": memory_context.build_context(context.input_event, seen_ids=seen_ids),
             "tracer": tracer,
             "retry_count": 0,
             "max_retries": self.max_retries,
@@ -102,12 +104,14 @@ class NPCAgent:
             "react_steps": [],
             "messages": [],
             "context_budget": ContextBudget(model_ctx_limit=self.model_ctx_limit),
-            "todo_list_text": render_todo_text(context.memory),
+            "runtime": runtime,
+            "todo_list_text": context.todo,
             "active_skills": [],
+            "memory_updates": [],
         }
 
         final_state = graph.invoke(initial)
-        return _build_response(dict(final_state), context)
+        return _build_response(dict(final_state), runtime)
 
 
 # ----------------------------------------------------------------------
@@ -122,7 +126,11 @@ def _build_graph(planner: Planner, executor: Executor, reflector: Reflector):
 
     sg.add_edge(START, "planner")
     sg.add_edge("planner", "executor")
-    sg.add_conditional_edges("executor", _should_retry, {"retry": "planner", "done": "reflector"})
+    sg.add_conditional_edges(
+        "executor",
+        _after_executor,
+        {"action": END, "retry": "planner", "done": "reflector"},
+    )
     sg.add_edge("reflector", END)
     return sg.compile()
 
@@ -144,7 +152,11 @@ def _executor_with_skip(executor: Executor):
     return _run
 
 
-def _should_retry(state: AgentState) -> str:
+def _after_executor(state: AgentState) -> str:
+    runtime = state.get("runtime", {})
+    if runtime.get("pending_action_ids") and runtime.get("actions"):
+        return "action"
+
     results = state.get("execution_results", [])
     retry_count = state.get("retry_count", 0)
     max_retries = state.get("max_retries", 0)
@@ -158,16 +170,20 @@ def _should_retry(state: AgentState) -> str:
     return "done"
 
 
-def _build_response(state: dict, context: AgentContext) -> AgentResponse:
+def _build_response(state: dict, runtime: dict) -> AgentResponse:
     results = state.get("execution_results", [])
     dialogue_parts = [r["action"] for r in results if r.get("action")]
     dialogue = "\n".join(dialogue_parts)
-    thoughts = context.extra.get("_inner_thoughts", []) or []
+    thoughts = runtime.get("inner_thoughts", []) or []
     inner_thought = "\n".join(str(t) for t in thoughts)
+    memory_updates = [
+        *runtime.get("memory_updates", []),
+        *state.get("memory_updates", []),
+    ]
     return AgentResponse(
         dialogue=dialogue,
         inner_thought=inner_thought,
-        actions=[],
-        memory_updates=[],
+        actions=list(runtime.get("actions", [])),
+        memory_updates=memory_updates,
         reflection=state.get("reflection", ""),
     )

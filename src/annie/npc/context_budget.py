@@ -1,7 +1,7 @@
 """ContextBudget — Emergency fold when Executor messages approach the model limit.
 
 Owned by the Agent layer; consulted before each LLM call in the tool-use loop.
-Trim / Fold live in the WorldEngine; Micro lives in ToolAgent. This module
+Trim / Fold live in the WorldEngine; Micro lives in ToolDispatcher. This module
 handles the *Agent-internal* last-resort compression — fold earliest tool
 turns into a single ``SystemMessage`` summary, preserving the latest 2 rounds.
 """

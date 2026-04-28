@@ -1,12 +1,37 @@
 """Tests for Executor node."""
 
 from unittest.mock import MagicMock
+from types import SimpleNamespace
 
 import pytest
 
+from langchain_core.messages import AIMessage, BaseMessage
+
+from annie.npc.agent import _after_executor
 from annie.npc.executor import Executor
-from annie.npc.state import AgentState, NPCProfile, Personality, Task, TaskStatus
+from annie.npc.context import AgentContext
+from annie.npc.runtime.tool_dispatcher import ToolDispatcher
+from annie.npc.state import AgentState, Task, TaskStatus
+from annie.npc.tools.tool_registry import ToolRegistry
 from annie.npc.tracing import EventType, Tracer
+
+
+class _StubLLM:
+    def __init__(self, responses: list):
+        self._responses = list(responses)
+        self.calls: list[list[BaseMessage]] = []
+
+    def invoke(self, messages, **_):
+        self.calls.append(list(messages))
+        if not self._responses:
+            return AIMessage(content="")
+        nxt = self._responses.pop(0)
+        if isinstance(nxt, AIMessage):
+            return nxt
+        return AIMessage(content=str(nxt))
+
+    def bind_tools(self, tools):  # noqa: ARG002 - signature compatibility
+        return self
 
 
 @pytest.fixture
@@ -27,15 +52,24 @@ def mock_memory_agent():
 
 @pytest.fixture
 def npc_profile():
-    return NPCProfile(
+    return SimpleNamespace(
         name="Elder",
-        personality=Personality(traits=["wise", "cautious"], values=["safety"]),
+        personality=SimpleNamespace(traits=["wise", "cautious"], values=["safety"]),
     )
 
 
 @pytest.fixture
 def executor(mock_llm, mock_memory_agent):
-    return Executor(mock_llm, mock_memory_agent)
+    return Executor(mock_llm, ToolDispatcher(ToolRegistry(builtins=[])))
+
+
+def _ctx(profile) -> AgentContext:
+    return AgentContext(
+        npc_id=profile.name,
+        input_event="A stranger approaches.",
+        memory=MagicMock(),
+        character_prompt=f"Traits: {', '.join(profile.personality.traits)}",
+    )
 
 
 class TestExecutor:
@@ -46,6 +80,7 @@ class TestExecutor:
             Task(description="Recall past encounters"),
         ]
         state: AgentState = {
+            "agent_context": _ctx(npc_profile),
             "npc_profile": npc_profile,
             "input_event": "A stranger approaches.",
             "tasks": tasks,
@@ -59,6 +94,7 @@ class TestExecutor:
         tracer = Tracer("Elder")
         tasks = [Task(description="Observe the stranger")]
         state: AgentState = {
+            "agent_context": _ctx(npc_profile),
             "npc_profile": npc_profile,
             "input_event": "Event",
             "tasks": tasks,
@@ -72,6 +108,7 @@ class TestExecutor:
         tracer = Tracer("Elder")
         tasks = [Task(description="Observe the stranger")]
         state: AgentState = {
+            "agent_context": _ctx(npc_profile),
             "npc_profile": npc_profile,
             "input_event": "Event",
             "tasks": tasks,
@@ -83,22 +120,25 @@ class TestExecutor:
         assert "task_description" in r
         assert "action" in r
 
-    def test_memory_agent_queried(self, executor, npc_profile, mock_memory_agent):
+    def test_uses_prerendered_working_memory(self, executor, npc_profile):
         tracer = Tracer("Elder")
         tasks = [Task(description="Observe the stranger")]
         state: AgentState = {
+            "agent_context": _ctx(npc_profile),
             "npc_profile": npc_profile,
             "input_event": "Event",
             "tasks": tasks,
             "tracer": tracer,
+            "working_memory": "Already retrieved notes.",
         }
-        executor(state)
-        mock_memory_agent.build_context.assert_called_once()
+        result = executor(state)
+        assert result["execution_results"][0]["action"]
 
     def test_tracing_events(self, executor, npc_profile):
         tracer = Tracer("Elder")
         tasks = [Task(description="Observe the stranger")]
         state: AgentState = {
+            "agent_context": _ctx(npc_profile),
             "npc_profile": npc_profile,
             "input_event": "Event",
             "tasks": tasks,
@@ -108,13 +148,13 @@ class TestExecutor:
         event_types = [e.event_type for e in tracer.events]
         assert EventType.NODE_ENTER in event_types
         assert EventType.NODE_EXIT in event_types
-        assert EventType.MEMORY_READ in event_types
         assert EventType.LLM_CALL in event_types
         assert EventType.LLM_RESPONSE in event_types
 
     def test_works_without_tracer(self, executor, npc_profile):
         tasks = [Task(description="Observe the stranger")]
         state: AgentState = {
+            "agent_context": _ctx(npc_profile),
             "npc_profile": npc_profile,
             "input_event": "Event",
             "tasks": tasks,
@@ -125,6 +165,7 @@ class TestExecutor:
     def test_empty_tasks(self, executor, npc_profile):
         tracer = Tracer("Elder")
         state: AgentState = {
+            "agent_context": _ctx(npc_profile),
             "npc_profile": npc_profile,
             "input_event": "Event",
             "tasks": [],
@@ -133,3 +174,156 @@ class TestExecutor:
         result = executor(state)
         assert result["execution_results"] == []
         assert result["tasks"] == []
+
+    def test_empty_final_answer_marks_task_failed(self, npc_profile):
+        llm = MagicMock()
+        response = MagicMock()
+        response.content = ""
+        llm.invoke.return_value = response
+        executor = Executor(llm, ToolDispatcher(ToolRegistry(builtins=[])))
+        task = Task(description="Observe the stranger")
+        result = executor({
+            "agent_context": _ctx(npc_profile),
+            "input_event": "Event",
+            "tasks": [task],
+            "runtime": {},
+        })
+        assert result["tasks"][0].status == TaskStatus.FAILED
+        assert result["execution_results"] == []
+
+    def test_max_tool_loops_exhaustion_marks_task_failed(self, npc_profile):
+        llm = MagicMock()
+        llm.invoke.return_value = AIMessage(
+            content="",
+            tool_calls=[{"name": "missing_tool", "args": {}, "id": "call_1"}],
+        )
+        executor = Executor(llm, ToolDispatcher(ToolRegistry(builtins=[])), max_loops=1)
+        task = Task(description="Observe the stranger")
+        result = executor({
+            "agent_context": _ctx(npc_profile),
+            "input_event": "Event",
+            "tasks": [task],
+            "runtime": {},
+        })
+        assert result["tasks"][0].status == TaskStatus.FAILED
+        assert "MAX_TOOL_LOOPS" in result["tasks"][0].result
+        assert result["execution_results"] == []
+
+    def test_failed_task_triggers_retry_when_budget_remains(self):
+        state: AgentState = {
+            "tasks": [Task(description="x", status=TaskStatus.FAILED)],
+            "execution_results": [],
+            "retry_count": 0,
+            "max_retries": 1,
+        }
+        assert _after_executor(state) == "retry"
+
+    def test_later_task_receives_prior_task_results(self, npc_profile):
+        llm = _StubLLM([
+            "First task complete.",
+            "Second task used the first result.",
+        ])
+        executor = Executor(llm, ToolDispatcher(ToolRegistry(builtins=[])))
+        tasks = [
+            Task(description="Observe the stranger"),
+            Task(description="Respond to the observation"),
+        ]
+
+        result = executor({
+            "agent_context": _ctx(npc_profile),
+            "input_event": "Event",
+            "tasks": tasks,
+            "runtime": {},
+        })
+
+        assert len(result["execution_results"]) == 2
+        second_task_messages = "\n".join(str(m.content) for m in llm.calls[1])
+        assert "<prior_task_results>" in second_task_messages
+        assert "Observe the stranger" in second_task_messages
+        assert "First task complete." in second_task_messages
+
+    def test_request_action_stops_remaining_tasks(self, npc_profile):
+        llm = _StubLLM([
+            AIMessage(
+                content="",
+                tool_calls=[{
+                    "name": "request_action",
+                    "args": {"type": "move", "payload": {"to": "kitchen"}},
+                    "id": "call_move",
+                }],
+            ),
+            "This second task should not run.",
+        ])
+        executor = Executor(llm, ToolDispatcher(ToolRegistry()))
+        tasks = [
+            Task(description="Move to the kitchen"),
+            Task(description="Talk after moving"),
+        ]
+
+        result = executor({
+            "agent_context": _ctx(npc_profile),
+            "input_event": "Event",
+            "tasks": tasks,
+            "runtime": {
+                "actions": [],
+                "action_results": [],
+                "memory_updates": [],
+                "pending_action_ids": [],
+            },
+        })
+
+        assert len(llm.calls) == 1
+        assert len(result["tasks"]) == 1
+        assert result["tasks"][0].status == TaskStatus.DONE
+        assert len(result["execution_results"]) == 1
+        assert result["runtime"]["pending_action_ids"]
+
+    def test_use_skill_with_empty_final_answer_does_not_complete_task(self, npc_profile):
+        llm = _StubLLM([
+            AIMessage(
+                content="",
+                tool_calls=[{
+                    "name": "use_skill",
+                    "args": {"skill_name": "missing", "args": {}},
+                    "id": "call_skill",
+                }],
+            ),
+            AIMessage(content=""),
+        ])
+        executor = Executor(llm, ToolDispatcher(ToolRegistry()))
+        task = Task(description="Use a skill")
+
+        result = executor({
+            "agent_context": _ctx(npc_profile),
+            "input_event": "Event",
+            "tasks": [task],
+            "runtime": {},
+        })
+
+        assert result["tasks"][0].status == TaskStatus.FAILED
+        assert result["execution_results"] == []
+
+    def test_inner_monologue_with_empty_final_answer_does_not_complete_task(self, npc_profile):
+        llm = _StubLLM([
+            AIMessage(
+                content="",
+                tool_calls=[{
+                    "name": "inner_monologue",
+                    "args": {"thought": "I should stay cautious."},
+                    "id": "call_thought",
+                }],
+            ),
+            AIMessage(content=""),
+        ])
+        executor = Executor(llm, ToolDispatcher(ToolRegistry()))
+        task = Task(description="Think privately")
+
+        result = executor({
+            "agent_context": _ctx(npc_profile),
+            "input_event": "Event",
+            "tasks": [task],
+            "runtime": {"inner_thoughts": []},
+        })
+
+        assert result["tasks"][0].status == TaskStatus.FAILED
+        assert result["execution_results"] == []
