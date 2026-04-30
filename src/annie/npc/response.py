@@ -13,6 +13,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from annie.npc.routes import AgentRoute
+
 
 class ActionRequest(BaseModel):
     """An intent declaration — *not* a direct world mutation."""
@@ -42,8 +44,12 @@ class MemoryUpdate(BaseModel):
 
 
 class AgentResponse(BaseModel):
+    route: AgentRoute = AgentRoute.ACTION
+    graph_id: str = ""
     dialogue: str = ""
+    structured_output: str = ""
     inner_thought: str = ""
     actions: list[ActionRequest] = Field(default_factory=list)
     memory_updates: list[MemoryUpdate] = Field(default_factory=list)
     reflection: str = ""
+    debug: dict[str, Any] = Field(default_factory=dict)

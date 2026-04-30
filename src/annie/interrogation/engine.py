@@ -6,11 +6,12 @@ import os
 import shutil
 import chromadb
 from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any
 
 from annie.npc.context import AgentContext
+from annie.npc.graph_registry import AgentGraphID
 from annie.npc.response import AgentResponse
-from annie.npc.memory.interface import MemoryInterface, MemoryRecord, MEMORY_CATEGORY_SEMANTIC, MEMORY_CATEGORY_EPISODIC
+from annie.npc.memory.interface import MEMORY_CATEGORY_EPISODIC, MEMORY_CATEGORY_SEMANTIC
 from annie.world_engine.base import WorldEngine
 from annie.world_engine.memory import DefaultMemoryInterface
 from annie.interrogation.state import InterrogationState, GamePhase
@@ -118,6 +119,7 @@ class InterrogationEngine(WorldEngine):
             npc_id=npc_id,
             input_event=event,
             memory=mem,
+            graph_id=AgentGraphID.ACTION_EXECUTOR_DEFAULT,
             character_prompt=f"### IDENTITY MANDATE\n{mandate}",
             world_rules="\n".join(world_rules),
             situation=situation,

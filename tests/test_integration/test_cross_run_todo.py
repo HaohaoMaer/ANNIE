@@ -3,7 +3,7 @@
 Scenario:
   Run 1 — adds a todo via plan_todo(add).
   Run 2 — <todo> in the Executor system prompt contains the item; completes it.
-  Run 3 — <todo> shows (none).
+  Run 3 — <todo> shows 无.
 """
 from __future__ import annotations
 
@@ -57,10 +57,8 @@ def test_todo_persists_across_runs(tmp_path, tmp_chroma):
         }],
     )
     llm1 = _StubLLM([
-        '{"decision":"skip","reason":"simple event","tasks":[]}',  # planner
         add_todo_ai,        # executor: add todo
         "NPC1 nods.",       # executor: final answer
-        '{"reflection":"r1.","facts":[],"relationship_notes":[]}',
     ])
     ctx1 = we.build_context("npc1", event="Event 1.")
     resp1 = NPCAgent(llm=llm1).run(ctx1)
@@ -84,35 +82,31 @@ def test_todo_persists_across_runs(tmp_path, tmp_chroma):
         }],
     )
     llm2 = _StubLLM([
-        '{"decision":"skip","reason":"simple event","tasks":[]}',
         complete_todo_ai,
         "NPC1 found the dagger.",
-        '{"reflection":"r2.","facts":[],"relationship_notes":[]}',
     ])
     ctx2 = we.build_context("npc1", event="Event 2.")
     resp2 = NPCAgent(llm=llm2).run(ctx2)
     we.handle_response("npc1", resp2)
 
     # The executor system prompt in run2 should contain the open todo.
-    system_content_run2 = llm2.calls[1][0].content
+    system_content_run2 = llm2.calls[0][0].content
     assert "去厨房找匕首" in system_content_run2, (
         "<todo> section in run2 should list the open todo from run1"
     )
     assert todo_id in system_content_run2
 
     # ------------------------------------------------------------------ Run 3
-    # After completion, <todo> should be (none).
+    # After completion, <todo> should be 无.
     llm3 = _StubLLM([
-        '{"decision":"skip","reason":"simple event","tasks":[]}',
         "NPC1 relaxes.",
-        '{"reflection":"r3.","facts":[],"relationship_notes":[]}',
     ])
     ctx3 = we.build_context("npc1", event="Event 3.")
     NPCAgent(llm=llm3).run(ctx3)
 
-    system_content_run3 = llm3.calls[1][0].content
+    system_content_run3 = llm3.calls[0][0].content
     assert "去厨房找匕首" not in system_content_run3, (
         "completed todo should not appear in run3 <todo> section"
     )
-    # The todo block should render as (none)
-    assert "(none)" in system_content_run3
+    # The todo block should render as 无.
+    assert "无" in system_content_run3

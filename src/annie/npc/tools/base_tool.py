@@ -45,6 +45,8 @@ class ToolDef(ABC):
     output_schema: type[BaseModel] | None = None
     is_read_only: bool = True
     is_concurrency_safe: bool = True
+    ends_activation_on_success: bool = False
+    allowed_routes: set[str] | frozenset[str] | None = None
 
     @abstractmethod
     def call(self, input: BaseModel | dict, ctx: ToolContext) -> Any:

@@ -1,7 +1,7 @@
 """Integration test: NPCAgent + DefaultWorldEngine end-to-end.
 
-Uses a stubbed LLM to exercise the full Planner → Executor → Reflector graph
-over the new native tool-use loop.
+Uses a stubbed LLM to exercise the executor-first action route and native
+tool-use loop.
 """
 
 from __future__ import annotations
@@ -51,9 +51,7 @@ def test_single_npc_single_run(tmp_path, tmp_chroma):
     we.register_profile("alice", NPCProfile(name="Alice"))
 
     llm = _StubLLM([
-        '{"decision":"skip","reason":"simple event","tasks":[]}',
         "Alice nods and greets the newcomer.",
-        '{"reflection":"Met someone new at the tavern.","facts":["A newcomer arrived"],"relationship_notes":[]}',
     ])
 
     ctx = we.build_context("alice", event="A stranger walks into the tavern.")
@@ -62,10 +60,10 @@ def test_single_npc_single_run(tmp_path, tmp_chroma):
 
     assert isinstance(response, AgentResponse)
     assert "Alice" in response.dialogue
-    assert "tavern" in response.reflection.lower()
+    assert response.reflection == ""
 
     # Executor system prompt must expose memory category catalog and working_memory.
-    executor_first_call = llm.calls[1]
+    executor_first_call = llm.calls[0]
     system_content = executor_first_call[0].content
     assert "<memory_categories>" in system_content
     assert "<working_memory>" in system_content
@@ -74,13 +72,10 @@ def test_single_npc_single_run(tmp_path, tmp_chroma):
     assert "<input_event>" in trigger
     assert "<task>" not in trigger
 
-    assert response.memory_updates, "agent should return reflection memory updates"
+    assert response.memory_updates == []
 
-    # handle_response must NOT write episodic records; the vector store holds
-    # only distilled content (reflection, semantic, impression, todo).
+    # handle_response must NOT write episodic records; raw dialogue belongs in history.
     we.handle_response("alice", response)
-    records = we.memory_for("alice").recall("newcomer", k=5)
-    assert records, "world engine should persist reflection records from response"
     episodic_records = we.memory_for("alice").grep(
         "", category="episodic", k=50,
     )
@@ -104,10 +99,8 @@ def test_inner_monologue_tool_populates_agent_response(tmp_path, tmp_chroma):
     reply = AIMessage(content="Dora stares silently.")
 
     llm = _StubLLM([
-        '{"decision":"skip","reason":"simple event","tasks":[]}',
         think_call,
         reply,
-        '{"reflection":"pondered.","facts":[],"relationship_notes":[]}',
     ])
 
     ctx = we.build_context("dora", event="A stranger enters.")
@@ -132,10 +125,8 @@ def test_tool_use_loop_dispatches_tool(tmp_path, tmp_chroma):
     second_ai = AIMessage(content="Bob greets the newcomer warmly.")
 
     llm = _StubLLM([
-        '{"decision":"skip","reason":"single step","tasks":[]}',  # planner
         first_ai,                                    # executor step 1 (tool call)
         second_ai,                                   # executor step 2 (final)
-        '{"reflection":"reflected.","facts":[],"relationship_notes":[]}',  # reflector
     ])
 
     ctx = we.build_context("bob", event="Stranger arrives")
@@ -144,7 +135,7 @@ def test_tool_use_loop_dispatches_tool(tmp_path, tmp_chroma):
 
     assert "Bob greets" in response.dialogue
     # The second executor invocation must have seen a ToolMessage injected.
-    executor_second_call = llm.calls[2]
+    executor_second_call = llm.calls[1]
     kinds = [type(m).__name__ for m in executor_second_call]
     assert "ToolMessage" in kinds, f"expected ToolMessage in messages, got {kinds}"
 
@@ -154,9 +145,7 @@ def test_rolling_history_is_injected_on_subsequent_run(tmp_path, tmp_chroma):
     we.register_profile("carol", NPCProfile(name="Carol"))
 
     llm = _StubLLM([
-        '{"decision":"skip","reason":"simple event","tasks":[]}',
         "Carol waves.",
-        '{"reflection":"waved.","facts":[],"relationship_notes":[]}',
     ])
     ctx1 = we.build_context("carol", event="A friend appears.")
     agent = NPCAgent(llm=llm)
@@ -185,16 +174,13 @@ def test_available_skills_rendered_in_executor_system(tmp_path, tmp_chroma):
     we.register_profile("alice", NPCProfile(name="Alice"))
 
     llm = _StubLLM([
-        '{"decision":"skip","reason":"simple event","tasks":[]}',
         "Alice replies.",
-        '{"reflection":"test.","facts":[],"relationship_notes":[]}',
     ])
 
     ctx = we.build_context("alice", event="Anything.")
     NPCAgent(llm=llm, skills_dir=str(tmp_path / "skills")).run(ctx)
 
-    # Executor is the second LLM invocation (index 1; index 0 is Planner)
-    system_content = llm.calls[1][0].content
+    system_content = llm.calls[0][0].content
     assert "<available_skills>" in system_content
     assert "myfeat" in system_content
     assert "我的特殊能力" in system_content
@@ -213,15 +199,13 @@ def test_todo_section_reflects_open_todos(tmp_path, tmp_chroma):
     )
 
     llm = _StubLLM([
-        '{"decision":"skip","reason":"simple event","tasks":[]}',
         "Eve looks around.",
-        '{"reflection":"test.","facts":[],"relationship_notes":[]}',
     ])
 
     ctx = we.build_context("eve", event="Something happens.")
     NPCAgent(llm=llm).run(ctx)
 
-    system_content = llm.calls[1][0].content
+    system_content = llm.calls[0][0].content
     assert "<todo>" in system_content
     assert "abc12345" in system_content
     assert "Investigate the library" in system_content
@@ -258,11 +242,9 @@ def test_use_skill_appends_system_message(tmp_path, tmp_chroma):
     final_ai = AIMessage(content="Spy has gathered the intel.")
 
     llm = _StubLLM([
-        '{"decision":"skip","reason":"simple event","tasks":[]}',  # planner
         use_skill_ai,       # executor step 1: call use_skill
         recall_ai,          # executor step 2: call memory_recall (after skill activated)
         final_ai,           # executor step 3: final answer
-        '{"reflection":"spied.","facts":[],"relationship_notes":[]}',
     ])
 
     ctx = we.build_context("spy_npc", event="Find out what's happening.")
@@ -270,9 +252,9 @@ def test_use_skill_appends_system_message(tmp_path, tmp_chroma):
 
     assert "intel" in response.dialogue
 
-    # llm.calls[2] = third overall invoke = second executor step (after use_skill processed)
+    # llm.calls[1] = second executor step (after use_skill processed)
     # The messages list at that point includes the SystemMessage appended by skill activation.
-    post_skill_messages = llm.calls[2]
+    post_skill_messages = llm.calls[1]
     system_contents = [
         m.content for m in post_skill_messages if isinstance(m, SystemMessage)
     ]

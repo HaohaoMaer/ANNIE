@@ -1,0 +1,8 @@
+[08:00] alice interact_with failed @ home_alice: 物体 kitchen 不存在。
+[08:00] bob interact_with succeeded @ cafe: bob 已与 咖啡馆柜台 交互。
+[08:00] clara interact_with succeeded @ library: clara 已与 书架 交互。
+[08:10] alice move_to succeeded @ town_square: alice 已从 home_alice 移动到 town_square。
+[08:10] bob wait succeeded @ cafe: bob 在 cafe 等待 15 分钟。全局小镇时钟没有推进。
+[08:10] clara finish_schedule_segment succeeded @ library: clara 已完成 08:00 开始、目标地点为 library 的日程段。
+[08:20] clara interact_with succeeded @ library: clara 已与 书架 交互。
+[08:20] alice move_to succeeded @ cafe: alice 已从 town_square 移动到 cafe。

@@ -1,0 +1,3 @@
+{"turn_id":1,"timestamp":"2026-04-29T07:09:28.023135+00:00","speaker":"clara","content":"已提交动作：interact_with","is_folded":false,"folded_from":null,"metadata":{"source":"town_dialogue","location_id":"library","clock_minute":480}}
+{"turn_id":2,"timestamp":"2026-04-29T07:09:59.069779+00:00","speaker":"clara","content":"已提交动作：interact_with","is_folded":false,"folded_from":null,"metadata":{"source":"town_dialogue","location_id":"library","clock_minute":490}}
+{"turn_id":3,"timestamp":"2026-04-29T07:10:31.221374+00:00","speaker":"clara","content":"已提交动作：finish_schedule_segment","is_folded":false,"folded_from":null,"metadata":{"source":"town_dialogue","location_id":"library","clock_minute":500}}

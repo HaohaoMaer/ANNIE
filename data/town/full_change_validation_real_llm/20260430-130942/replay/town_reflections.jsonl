@@ -1,0 +1,2 @@
+{"tick": null, "npc_id": "alice", "minute": 480, "time": "第 1 天，08:00", "content": "早上广场的紧急铃声让我决定先去查看情况，而鲍勃选择先忙完咖啡馆的准备工作再过来。", "trigger_poignancy": 8, "evidence_ids": ["alice_event_1", "alice_conversation_2"], "evidence_types": ["conversation", "event"], "evidence_count": 2}
+{"tick": 6, "npc_id": "alice", "minute": 540, "time": "第 1 天，09:00", "content": "今天早上广场响起了紧急铃声，我按计划在家吃了早餐。", "trigger_poignancy": 7, "evidence_ids": ["alice_event_1", "alice_schedule_2"], "evidence_types": ["event", "schedule"], "evidence_count": 2}

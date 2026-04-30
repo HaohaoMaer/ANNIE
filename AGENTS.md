@@ -6,8 +6,8 @@ compatibility pointer and should not be treated as the source of truth.
 ## Repository Status
 
 ANNIE is mid-refactor. The old end-to-end "Midnight Train" murder-mystery demo
-was built on a deleted `social_graph` + `cognitive` layer. The current
-architecture is a strict two-layer split:
+was built on deleted legacy coupling layers. The current architecture is a
+strict two-layer split:
 
 - `src/annie/npc/`: stateless, business-agnostic NPC Agent framework.
 - `src/annie/world_engine/`: world state, memory backends, business tools,
@@ -25,6 +25,18 @@ Source of truth for large architectural work:
   `openspec/changes/archive/2026-04-12-decouple-npc-world-engine/`
 
 ## Common Commands
+
+Use the existing Conda environment for this project:
+
+```bash
+conda activate annie
+# or for non-interactive commands:
+conda run -n annie <command>
+```
+
+LLM API settings are project-owned. Use `config/model_config.yaml` and the
+environment variables already configured for the project; do not create ad-hoc
+LLM config unless explicitly requested.
 
 ```bash
 # Install editable package with dev tools
@@ -57,8 +69,8 @@ store.
 
 - Prefer editing through `apply_patch` for manual file changes.
 - Use `rg` / `rg --files` for search.
-- Do not revive deleted legacy modules (`cognitive/`, `social_graph/`,
-  `perception.py`, old `BaseTool`, old Jinja-driven `BaseSkill`).
+- Do not revive deleted legacy modules (`cognitive/`, `perception.py`, old
+  `BaseTool`, old Jinja-driven `BaseSkill`).
 - Keep changes scoped to the requested behavior and the active OpenSpec change.
 - Do not modify generated Chroma/vector-store data unless the task explicitly
   asks for data regeneration.
@@ -87,8 +99,7 @@ core refactor invariant and is enforced by `openspec/specs/`.
 
 This layer is a generic AI capability framework. It must not import `chromadb`,
 hold world state, parse NPC YAML, or contain business vocabulary such as script,
-clue, sandbox, phase-specific game logic, `EmotionalState`, `BeliefSystem`, or
-`SocialGraph`.
+clue, sandbox, phase-specific game logic, `EmotionalState`, or `BeliefSystem`.
 
 Key contracts:
 

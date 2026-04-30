@@ -10,6 +10,7 @@ from langchain_core.language_models import BaseChatModel
 
 from annie.npc.agent import NPCAgent
 from annie.npc.context import AgentContext
+from annie.npc.graph_registry import AgentGraphID
 from annie.npc.memory.interface import MemoryInterface
 from annie.npc.response import AgentResponse
 from annie.war_game.config import GameConfig
@@ -124,6 +125,7 @@ class WarGameEngine(WorldEngine):
             tools=tools,
             skills=[],
             memory=self.memory_for(npc_id),
+            graph_id=AgentGraphID.ACTION_EXECUTOR_DEFAULT,
             character_prompt=self._character_prompts.get(npc_id, ""),
             world_rules=WORLD_RULES,
             situation=situation,

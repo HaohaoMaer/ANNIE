@@ -70,6 +70,7 @@ class MemoryRecallTool(ToolDef):
     description = "Retrieve NPC long-term memory relevant to a query."
     input_schema = MemoryRecallInput
     is_read_only = True
+    allowed_routes = frozenset({"action", "dialogue"})
 
     def call(self, input: BaseModel | dict, ctx: ToolContext) -> Any:
         inp = _coerce(input, MemoryRecallInput)
@@ -105,6 +106,7 @@ class MemoryGrepTool(ToolDef):
     )
     input_schema = MemoryGrepInput
     is_read_only = True
+    allowed_routes = frozenset({"action", "dialogue"})
 
     def call(self, input: BaseModel | dict, ctx: ToolContext) -> Any:
         inp = _coerce(input, MemoryGrepInput)
@@ -132,6 +134,7 @@ class MemoryStoreTool(ToolDef):
     description = "Declare a long-term memory update for the world engine to arbitrate."
     input_schema = MemoryStoreInput
     is_read_only = False
+    allowed_routes = frozenset({"action"})
 
     def call(self, input: BaseModel | dict, ctx: ToolContext) -> Any:
         inp = _coerce(input, MemoryStoreInput)
@@ -154,6 +157,7 @@ class DeclareActionTool(ToolDef):
     description = "Declare a world action intent for the world engine to arbitrate."
     input_schema = DeclareActionInput
     is_read_only = False
+    allowed_routes = frozenset({"action"})
 
     def call(self, input: BaseModel | dict, ctx: ToolContext) -> Any:
         inp = _coerce(input, DeclareActionInput)
@@ -171,6 +175,7 @@ class RequestActionTool(ToolDef):
     )
     input_schema = DeclareActionInput
     is_read_only = False
+    allowed_routes = frozenset({"action"})
 
     def call(self, input: BaseModel | dict, ctx: ToolContext) -> Any:
         inp = _coerce(input, DeclareActionInput)
@@ -201,6 +206,7 @@ class UseSkillTool(ToolDef):
     )
     input_schema = UseSkillInput
     is_read_only = False
+    allowed_routes = frozenset({"action"})
 
     def call(self, input: BaseModel | dict, ctx: ToolContext) -> Any:
         inp = _coerce(input, UseSkillInput)
@@ -238,6 +244,7 @@ class InnerMonologueTool(ToolDef):
     )
     input_schema = InnerMonologueInput
     is_read_only = True
+    allowed_routes = frozenset({"action", "dialogue"})
 
     def call(self, input: BaseModel | dict, ctx: ToolContext) -> Any:
         inp = _coerce(input, InnerMonologueInput)

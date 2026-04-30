@@ -123,7 +123,7 @@ class WorldActionTool(ToolDef):
 def render_todo_text(memory: Any) -> str:
     todos = render_open_todos(memory)
     if not todos:
-        return "(none)"
+        return "无"
     return "\n".join(f"- [{t['todo_id']}] {t['content']}" for t in todos)
 
 

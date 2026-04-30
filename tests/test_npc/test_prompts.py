@@ -97,7 +97,7 @@ def test_executor_system_no_hardcoded_tool_names():
 def test_executor_working_memory_empty_renders_none():
     ex = _executor()
     msgs = ex._initial_messages(_make_ctx(), Task(description="x"), working_memory="")
-    assert "(none)" in msgs[0].content
+    assert "无" in msgs[0].content
 
 
 def test_skip_marker_trigger_omits_task_section():
@@ -154,7 +154,7 @@ def test_planner_builder_includes_prompt_fields_but_not_history_messages():
 def test_builder_empty_fields_render_none():
     ctx = _make_ctx(character_prompt="", world_rules="", situation="", input_event="", todo="")
     msgs = build_planner_messages(ctx, "")
-    assert msgs[1].content.count("(none)") >= 4
+    assert msgs[1].content.count("无") >= 4
 
 
 def test_executor_builder_includes_history_sequence():

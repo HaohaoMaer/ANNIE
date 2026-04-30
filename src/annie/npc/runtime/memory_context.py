@@ -41,7 +41,7 @@ class MemoryContextBuilder:
         skip them.
         """
         text = self._memory.build_context(query)
-        if seen_ids is not None and text and text != "No relevant memories.":
+        if seen_ids is not None and text and text not in {"No relevant memories.", "无相关记忆。"}:
             # Best-effort: register the content we know was recalled.
             # We pull the raw records to get their content strings.
             try:

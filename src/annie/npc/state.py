@@ -54,3 +54,4 @@ class AgentState(TypedDict, total=False):
     todo_list_text: str
     active_skills: list[str]
     memory_updates: list[Any]
+    debug_graph_nodes: list[str]

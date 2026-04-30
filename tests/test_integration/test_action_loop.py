@@ -36,7 +36,6 @@ def tmp_chroma(tmp_path):
 
 def test_request_action_returns_before_reflector(tmp_path, tmp_chroma):
     llm = _StubLLM([
-        '{"decision":"skip","reason":"needs world action","tasks":[]}',
         AIMessage(
             content="",
             tool_calls=[{
@@ -55,7 +54,7 @@ def test_request_action_returns_before_reflector(tmp_path, tmp_chroma):
     assert len(response.actions) == 1
     assert response.actions[0].type == "move"
     assert response.memory_updates == []
-    assert len(llm.calls) == 2
+    assert len(llm.calls) == 1
 
 
 def test_request_action_stops_remaining_planned_tasks(tmp_path, tmp_chroma):
@@ -81,7 +80,9 @@ def test_request_action_stops_remaining_planned_tasks(tmp_path, tmp_chroma):
     engine = DefaultWorldEngine(chroma_client=tmp_chroma, history_dir=tmp_path / "hist")
     engine.register_profile("alice", NPCProfile(name="Alice"))
 
-    response = NPCAgent(llm=llm).run(engine.build_context("alice", "Move, then report."))
+    ctx = engine.build_context("alice", "Move, then report.")
+    ctx.extra["action_planning"] = "always"
+    response = NPCAgent(llm=llm).run(ctx)
 
     assert len(response.actions) == 1
     assert response.actions[0].type == "move"
@@ -91,7 +92,6 @@ def test_request_action_stops_remaining_planned_tasks(tmp_path, tmp_chroma):
 
 def test_world_action_result_stays_inside_executor_react_loop(tmp_path, tmp_chroma):
     llm = _StubLLM([
-        '{"decision":"skip","reason":"try movement in executor","tasks":[]}',
         AIMessage(
             content="",
             tool_calls=[{
@@ -117,7 +117,6 @@ def test_world_action_result_stays_inside_executor_react_loop(tmp_path, tmp_chro
             }],
         ),
         "Alice reaches the kitchen.",
-        '{"reflection":"Reached the kitchen via hallway.","facts":[],"relationship_notes":[]}',
     ])
     engine = DefaultWorldEngine(chroma_client=tmp_chroma, history_dir=tmp_path / "hist")
     engine.register_profile("alice", NPCProfile(name="Alice"))
@@ -129,12 +128,12 @@ def test_world_action_result_stays_inside_executor_react_loop(tmp_path, tmp_chro
 
     assert response.actions == []
     assert "kitchen" in response.dialogue
-    assert len(llm.calls) == 6
-    second_executor_messages = "\n".join(str(m.content) for m in llm.calls[2])
+    assert len(llm.calls) == 4
+    second_executor_messages = "\n".join(str(m.content) for m in llm.calls[1])
     assert "unreachable" in second_executor_messages
     assert "hallway" in second_executor_messages
     assert "请根据以下上下文判断是否需要多步骤计划" not in second_executor_messages
-    third_executor_messages = "\n".join(str(m.content) for m in llm.calls[3])
+    third_executor_messages = "\n".join(str(m.content) for m in llm.calls[2])
     assert '"status": "succeeded"' in third_executor_messages
     assert "kitchen" in third_executor_messages
     assert "请根据以下上下文判断是否需要多步骤计划" not in third_executor_messages
@@ -142,7 +141,6 @@ def test_world_action_result_stays_inside_executor_react_loop(tmp_path, tmp_chro
 
 def test_drive_npc_feeds_failed_action_result_back_to_agent(tmp_path, tmp_chroma):
     llm = _StubLLM([
-        '{"decision":"skip","reason":"try direct move","tasks":[]}',
         AIMessage(
             content="",
             tool_calls=[{
@@ -151,7 +149,6 @@ def test_drive_npc_feeds_failed_action_result_back_to_agent(tmp_path, tmp_chroma
                 "id": "call_kitchen",
             }],
         ),
-        '{"decision":"skip","reason":"try reachable room","tasks":[]}',
         AIMessage(
             content="",
             tool_calls=[{
@@ -160,9 +157,7 @@ def test_drive_npc_feeds_failed_action_result_back_to_agent(tmp_path, tmp_chroma
                 "id": "call_hallway",
             }],
         ),
-        '{"decision":"skip","reason":"movement resolved","tasks":[]}',
         "Alice waits in the hallway.",
-        '{"reflection":"Reached the hallway.","facts":[],"relationship_notes":[]}',
     ])
     engine = DefaultWorldEngine(chroma_client=tmp_chroma, history_dir=tmp_path / "hist")
     engine.register_profile("alice", NPCProfile(name="Alice"))
@@ -173,6 +168,7 @@ def test_drive_npc_feeds_failed_action_result_back_to_agent(tmp_path, tmp_chroma
     response = engine.drive_npc(agent, "alice", "Go to the kitchen.")
 
     assert "hallway" in response.dialogue
-    second_run_planner_messages = "\n".join(str(m.content) for m in llm.calls[2])
-    assert "unreachable" in second_run_planner_messages
-    assert "hallway" in second_run_planner_messages
+    second_run_executor_messages = "\n".join(str(m.content) for m in llm.calls[1])
+    assert "unreachable" in second_run_executor_messages
+    assert "hallway" in second_run_executor_messages
+    assert "请根据以下上下文判断是否需要多步骤计划" not in second_run_executor_messages

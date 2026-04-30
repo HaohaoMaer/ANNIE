@@ -27,12 +27,24 @@ class ToolRegistry:
         self,
         injected: list[ToolDef] | None = None,
         builtins: list[ToolDef] | None = None,
+        disabled_tools: set[str] | list[str] | tuple[str, ...] | None = None,
+        route: str = "action",
     ) -> None:
+        self._disabled_tools = set(disabled_tools or [])
+        self._route = route
         self._base: dict[str, ToolDef] = {}
         for t in builtins if builtins is not None else default_builtin_tools():
+            if not _tool_allowed_for_route(t, route, default_action_only=False):
+                continue
+            if t.name in self._disabled_tools:
+                continue
             self._base[t.name] = t
         if injected:
             for t in injected:
+                if not _tool_allowed_for_route(t, route, default_action_only=True):
+                    continue
+                if t.name in self._disabled_tools:
+                    continue
                 if t.name in self._base:
                     logger.warning(
                         "Tool '%s' is built-in; injected version ignored.", t.name,
@@ -43,6 +55,8 @@ class ToolRegistry:
 
     # ---- Read API ------------------------------------------------------
     def get(self, name: str) -> ToolDef | None:
+        if name in self._disabled_tools:
+            return None
         # Frames shadow base so skills can temporarily add tools, but never
         # override built-ins in `_base` (built-in wins at construction).
         for _, frame in reversed(self._frames):
@@ -54,14 +68,16 @@ class ToolRegistry:
         merged: dict[str, None] = dict.fromkeys(self._base)
         for _, frame in self._frames:
             for n in frame:
-                merged.setdefault(n, None)
+                if n not in self._disabled_tools:
+                    merged.setdefault(n, None)
         return list(merged)
 
     def get_descriptions(self) -> dict[str, str]:
         result: dict[str, str] = {n: t.description for n, t in self._base.items()}
         for _, frame in self._frames:
             for n, t in frame.items():
-                result.setdefault(n, t.description)
+                if n not in self._disabled_tools:
+                    result.setdefault(n, t.description)
         return result
 
     # ---- Frame stack ---------------------------------------------------
@@ -74,6 +90,10 @@ class ToolRegistry:
         """
         frame: dict[str, ToolDef] = {}
         for t in tools:
+            if not _tool_allowed_for_route(t, self._route, default_action_only=True):
+                continue
+            if t.name in self._disabled_tools:
+                continue
             if t.name in self._base and self._base[t.name] is not t:
                 logger.warning(
                     "Skill frame tool '%s' shadows built-in; ignored.", t.name,
@@ -100,3 +120,15 @@ class ToolRegistry:
                 self._frames.pop(i)
                 return
         logger.warning("pop_frame: frame id '%s' not found", frame_id)
+
+
+def _tool_allowed_for_route(
+    tool: ToolDef,
+    route: str,
+    *,
+    default_action_only: bool,
+) -> bool:
+    allowed = getattr(tool, "allowed_routes", None)
+    if allowed is None:
+        return route == "action" if default_action_only else True
+    return route in {str(item) for item in allowed}

@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from annie.npc.routes import AgentRoute
+
 if TYPE_CHECKING:
     from annie.npc.memory.interface import MemoryInterface
     from annie.npc.skills.base_skill import SkillDef
@@ -32,6 +34,14 @@ class AgentContext(BaseModel):
     tools: list["ToolDef"] = Field(default_factory=list)
     skills: list["SkillDef"] = Field(default_factory=list)
     memory: "MemoryInterface" = Field(..., description="Per-NPC memory implementation.")
+    graph_id: str | None = Field(
+        None,
+        description="Preferred registered NPC cognitive graph identifier for this run.",
+    )
+    route: AgentRoute = Field(
+        AgentRoute.ACTION,
+        description="Compatibility execution intent; graph_id is the preferred selector.",
+    )
 
     # ---- Prompt text fields --------------------------------------------
     character_prompt: str = ""

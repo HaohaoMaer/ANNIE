@@ -1,0 +1,2 @@
+{"turn_id":1,"timestamp":"2026-04-28T13:35:25.034861+00:00","speaker":"bob","content":"已提交动作：interact_with","is_folded":false,"folded_from":null,"metadata":{"source":"town_dialogue","location_id":"cafe","clock_minute":480}}
+{"turn_id":2,"timestamp":"2026-04-28T13:35:51.705016+00:00","speaker":"bob","content":"已提交动作：wait","is_folded":false,"folded_from":null,"metadata":{"source":"town_dialogue","location_id":"cafe","clock_minute":490}}

@@ -149,7 +149,7 @@ class DefaultMemoryInterface(MemoryInterface):
             label = _CATEGORY_LABELS.get(cat, cat.capitalize())
             sections.append(f"{label}:\n" + "\n".join(lines))
 
-        text = "\n\n".join(sections) if sections else "No relevant memories."
+        text = "\n\n".join(sections) if sections else "无相关记忆。"
         if len(text) > _BUILD_CONTEXT_MAX_CHARS:
             text = text[:_BUILD_CONTEXT_MAX_CHARS] + "\n[memory truncated]"
         return text

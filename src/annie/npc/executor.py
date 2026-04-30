@@ -214,7 +214,7 @@ class Executor:
                             output_summary=f"tool={name}", metadata={"tool": name},
                     )
                     tool = tool_registry.get(name)
-                    result = self.tool_dispatcher.dispatch(call, ctx)
+                    dispatch = self.tool_dispatcher.dispatch_result(call, ctx)
                     productive_effect = (
                         productive_effect
                         or _has_runtime_productive_effect(
@@ -224,12 +224,17 @@ class Executor:
                     )
                     if _tool_has_productive_effect(tool, name):
                         productive_effect = True
-                    messages.append(ToolMessage(content=result, tool_call_id=call_id))
+                    messages.append(ToolMessage(content=dispatch.content, tool_call_id=call_id))
                     if len(runtime.get("pending_action_ids") or []) > pending_action_baseline:
                         return LoopResult(
                             final_ai=AIMessage(content=""),
                             productive_effect=True,
                             pending_action=True,
+                        )
+                    if _ends_activation_after_dispatch(dispatch):
+                        return LoopResult(
+                            final_ai=AIMessage(content=f"已提交动作：{name}"),
+                            productive_effect=True,
                         )
 
             logger.warning(
@@ -329,6 +334,16 @@ def _tool_has_productive_effect(tool: Any, name: str) -> bool:
     if tool is None or getattr(tool, "is_read_only", True):
         return False
     return name != "use_skill"
+
+
+def _ends_activation_after_dispatch(dispatch: Any) -> bool:
+    tool = getattr(dispatch, "tool", None)
+    if tool is None or not getattr(tool, "ends_activation_on_success", False):
+        return False
+    payload = getattr(dispatch, "payload", None)
+    if isinstance(payload, dict):
+        return bool(payload.get("success"))
+    return True
 
 
 def _render_prior_results(results: list[dict[str, Any]]) -> str:

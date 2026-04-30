@@ -358,7 +358,7 @@ AgentResponse → WorldEngine.handle_response
 
 ## 附：面试追问预案
 
-- **"这个项目有多少行代码 / 写了多久"**：诚实报。重点是"架构演进"——从单层端到端 demo 重构成两层解耦，过程中删除了 `cognitive/` `social_graph/` 等重耦合模块。
+- **"这个项目有多少行代码 / 写了多久"**：诚实报。重点是"架构演进"——从单层端到端 demo 重构成两层解耦，过程中删除了 `cognitive/` 等重耦合模块。
 - **"LLM 选型"**：框架对 LLM 不耦合，任何 LangChain `BaseChatModel` 兼容的 provider 都可以。测试里用 `_StubLLM`。
 - **"没做什么功能"**：多 NPC 之间的对话协调、场景调度这一层在 `WorldEngine` 实现里，当前只有 `DefaultWorldEngine` 的基础实现，剧本杀 Demo 层正在基于新架构重建。诚实说比吹已完成更安全。
 - **"和 LangGraph 官方 ReAct 模板比"**：官方模板只有 ReAct 一节点；本项目三节点 + 显式 retry + per-task 隔离的 tool 帧栈，是针对 NPC 场景的定制。

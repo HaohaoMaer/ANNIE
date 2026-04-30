@@ -6,12 +6,14 @@ from types import SimpleNamespace
 import pytest
 
 from langchain_core.messages import AIMessage, BaseMessage
+from pydantic import BaseModel
 
 from annie.npc.agent import _after_executor
 from annie.npc.executor import Executor
 from annie.npc.context import AgentContext
 from annie.npc.runtime.tool_dispatcher import ToolDispatcher
 from annie.npc.state import AgentState, Task, TaskStatus
+from annie.npc.tools.base_tool import ToolContext, ToolDef
 from annie.npc.tools.tool_registry import ToolRegistry
 from annie.npc.tracing import EventType, Tracer
 
@@ -327,3 +329,77 @@ class TestExecutor:
 
         assert result["tasks"][0].status == TaskStatus.FAILED
         assert result["execution_results"] == []
+
+    def test_read_only_tool_can_continue_until_final_answer(self, npc_profile):
+        llm = _StubLLM([
+            AIMessage(
+                content="",
+                tool_calls=[{"name": "read_note", "args": {}, "id": "call_read"}],
+            ),
+            AIMessage(content="Read result handled."),
+        ])
+        executor = Executor(
+            llm,
+            ToolDispatcher(ToolRegistry(injected=[_ReadNoteTool()], builtins=[])),
+        )
+        task = Task(description="Read before answering")
+
+        result = executor({
+            "agent_context": _ctx(npc_profile),
+            "input_event": "Event",
+            "tasks": [task],
+            "runtime": {},
+        })
+
+        assert len(llm.calls) == 2
+        assert result["tasks"][0].status == TaskStatus.DONE
+        assert result["execution_results"][0]["action"] == "Read result handled."
+
+    def test_commit_tool_ends_activation_after_tool_message(self, npc_profile):
+        llm = _StubLLM([
+            AIMessage(
+                content="",
+                tool_calls=[{"name": "commit_action", "args": {}, "id": "call_commit"}],
+            ),
+            AIMessage(content="This should not run."),
+        ])
+        executor = Executor(
+            llm,
+            ToolDispatcher(ToolRegistry(injected=[_CommitActionTool()], builtins=[])),
+            max_loops=1,
+        )
+        task = Task(description="Commit once")
+
+        result = executor({
+            "agent_context": _ctx(npc_profile),
+            "input_event": "Event",
+            "tasks": [task],
+            "runtime": {},
+        })
+
+        assert len(llm.calls) == 1
+        assert result["tasks"][0].status == TaskStatus.DONE
+        assert result["execution_results"][0]["action"] == "已提交动作：commit_action"
+        assert "MAX_TOOL_LOOPS" not in result["tasks"][0].result
+
+
+class _ReadNoteTool(ToolDef):
+    name = "read_note"
+    description = "Read a note."
+    input_schema = None
+    is_read_only = True
+
+    def call(self, input: BaseModel | dict, ctx: ToolContext):
+        return {"note": "current snapshot"}
+
+
+class _CommitActionTool(ToolDef):
+    name = "commit_action"
+    description = "Commit a world action."
+    input_schema = None
+    is_read_only = False
+    ends_activation_on_success = True
+
+    def call(self, input: BaseModel | dict, ctx: ToolContext):
+        ctx.runtime.setdefault("action_results", []).append({"status": "failed"})
+        return {"status": "failed", "reason": "business failure still committed"}

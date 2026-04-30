@@ -23,8 +23,10 @@ from chromadb.api import ClientAPI
 from langchain_core.language_models import BaseChatModel
 
 from annie.npc.context import AgentContext
+from annie.npc.graph_registry import AgentGraphID
 from annie.npc.memory.interface import MemoryInterface
 from annie.npc.response import ActionRequest, ActionResult, AgentResponse
+from annie.npc.routes import AgentRoute
 from annie.world_engine.profile import NPCProfile, load_npc_profile, profile_to_character_prompt
 from annie.world_engine.tools import PlanTodoTool, WorldActionTool, render_todo_text
 from annie.world_engine.base import WorldEngine
@@ -77,6 +79,8 @@ class DefaultWorldEngine(WorldEngine):
             tools=[PlanTodoTool(), WorldActionTool(npc_id, self.execute_action)],
             skills=[],
             memory=memory,
+            graph_id=AgentGraphID.ACTION_EXECUTOR_DEFAULT,
+            route=AgentRoute.ACTION,
             character_prompt=character_prompt,
             world_rules=self._world_rules,
             situation=self._situation,

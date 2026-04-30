@@ -1,0 +1,13 @@
+[08:00] alice interact_with succeeded @ home_alice: alice 已与 早餐桌 交互。
+[08:00] bob interact_with succeeded @ cafe: bob 已与 咖啡馆柜台 交互。
+[08:00] clara interact_with succeeded @ library: clara 已与 归还书车 交互。
+[08:10] alice finish_schedule_segment succeeded @ home_alice: alice 已完成 08:00 开始、目标地点为 home_alice 的日程段。
+[08:10] bob interact_with succeeded @ cafe: bob 已与 点心陈列柜 交互。
+[08:10] clara interact_with succeeded @ library: clara 已与 书架 交互。
+[08:20] bob interact_with succeeded @ cafe: bob 已与 咖啡馆柜台 交互。
+[08:20] clara finish_schedule_segment succeeded @ library: clara 已完成 08:00 开始、目标地点为 library 的日程段。
+[08:30] bob finish_schedule_segment succeeded @ cafe: bob 已完成 08:00 开始、目标地点为 cafe 的日程段。
+[09:00] alice move_to succeeded @ town_square: alice 已从 home_alice 移动到 town_square。
+[09:10] alice move_to succeeded @ cafe: alice 已从 town_square 移动到 cafe。
+[09:20] alice interact_with succeeded @ cafe: alice 已与 咖啡馆柜台 交互。
+[09:30] alice finish_schedule_segment succeeded @ cafe: alice 已完成 09:00 开始、目标地点为 cafe 的日程段。

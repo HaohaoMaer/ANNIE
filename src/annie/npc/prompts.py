@@ -12,6 +12,8 @@ if TYPE_CHECKING:
     from annie.npc.state import Task
     from annie.npc.skills.base_skill import SkillDef
 
+EMPTY_PROMPT_TEXT = "无"
+
 MEMORY_CATEGORIES_BLOCK = """\
 - episodic: 原始经历（旧类别；新默认流程不应写入）
 - semantic: 客观事实
@@ -85,9 +87,9 @@ REFLECTOR_SYSTEM_PROMPT = """\
 
 注意：
 - 你只声明 memory update 意图，不负责持久化。
-- reflection 必须是 NPC 视角的 2 到 4 句话。
+- reflection 是 NPC 视角的 2 到 4 句话，如果你认为没有什么值得记录的，可以留空。
 - facts 只写客观事实，不写猜测。
-- relationship_notes 只写与具体人物相关的观察。
+- relationship_notes 只写与具体人物相关的观察，如果你认为不需要，可以留空。
 - 只能输出严格 JSON。不要使用 markdown 代码块，不要在 JSON 外附加文字。
 
 输出格式：
@@ -98,6 +100,37 @@ REFLECTOR_SYSTEM_PROMPT = """\
     {"person": "Name", "observation": "text"}
   ]
 }
+"""
+
+DIRECT_REFLECTION_SYSTEM_PROMPT = """\
+你是 NPC 的长期记忆反思模块。你的职责是把世界引擎提供的证据压缩成可写入长期记忆的一段 reflection。
+
+规则：
+- 只基于 <situation> 中的小镇证据，不补写没有证据支持的事实。
+- 过滤系统元信息、工具名、函数名、调用方式、JSON 字段名和流程控制说明。
+- 不要写出 start_conversation、observe、tool、conversation_session、input_event 等内部实现词。
+- 使用 NPC 自己能自然拥有的视角，输出中文。
+- 输出 1 到 3 句纯文本，不要 markdown，不要 JSON，不要解释流程。
+"""
+
+DIRECT_JSON_SYSTEM_PROMPT = """\
+你是一个严格 JSON 生成模块。你的职责是根据上下文输出符合要求的 JSON。
+
+规则：
+- 不要扮演角色，不要写思考过程，不要调用工具。
+- 只输出一个 JSON object，不要 markdown，不要代码块，不要在 JSON 前后添加解释。
+- JSON 必须使用中文内容时保持中文。
+"""
+
+DIRECT_DIALOGUE_SYSTEM_PROMPT = """\
+你是 NPC 托管会话的一轮台词生成模块。你的职责是根据上下文输出角色对对方说的话。
+
+规则：
+- 只输出 NPC 要说的中文台词，1 到 3 句话。
+- 如果需要确认人物关系或既有记忆，可以调用本轮绑定的记忆工具或 inner_monologue；不要调用世界动作工具。
+- 不要写动作执行、移动、交互或系统流程。
+- 不要提到工具名、函数名、conversation_session、input_event、JSON 字段或内部规则。
+- 如果对话已经自然结束，只输出一句自然收尾台词，不要继续推进世界动作。
 """
 
 
@@ -118,14 +151,14 @@ def render_identity(ctx: Any) -> str:
             if part
         )
     else:
-        inner = "(none)"
+        inner = EMPTY_PROMPT_TEXT
     return f"<character>\n{inner}\n</character>"
 
 
 def render_skills_text(skills: list["SkillDef"]) -> str:
     """One-line-per-skill summary for the ``<available_skills>`` XML block."""
     if not skills:
-        return "(none)"
+        return EMPTY_PROMPT_TEXT
     return "\n".join(
         f"- {s.name}: {s.one_line}" if s.one_line else f"- {s.name}"
         for s in skills
@@ -205,6 +238,47 @@ def build_reflector_messages(
     ]
 
 
+def build_direct_reflection_messages(ctx: Any) -> list[BaseMessage]:
+    """Build a one-call reflection prompt for cognition-only contexts."""
+    sections = [
+        render_identity(ctx),
+        _section("world_rules", getattr(ctx, "world_rules", ""), "最高优先级规则"),
+        _section("situation", getattr(ctx, "situation", ""), "当前证据与场景状态"),
+        _section("working_memory", getattr(ctx, "working_memory", ""), "长期记忆摘要，可能为空"),
+        _section("input_event", getattr(ctx, "input_event", ""), "本轮触发事件"),
+    ]
+    return [
+        SystemMessage(content=DIRECT_REFLECTION_SYSTEM_PROMPT),
+        HumanMessage(content="请生成可写入长期记忆的反思。\n\n" + "\n".join(sections)),
+    ]
+
+
+def build_direct_json_messages(ctx: Any) -> list[BaseMessage]:
+    sections = [
+        _section("world_rules", getattr(ctx, "world_rules", ""), "最高优先级规则"),
+        _section("situation", getattr(ctx, "situation", ""), "当前数据与输出要求"),
+        _section("input_event", getattr(ctx, "input_event", ""), "本轮任务"),
+    ]
+    return [
+        SystemMessage(content=DIRECT_JSON_SYSTEM_PROMPT),
+        HumanMessage(content="请只输出 JSON。\n\n" + "\n".join(sections)),
+    ]
+
+
+def build_direct_dialogue_messages(ctx: Any) -> list[BaseMessage]:
+    sections = [
+        render_identity(ctx),
+        _section("world_rules", getattr(ctx, "world_rules", ""), "会话规则"),
+        _section("situation", getattr(ctx, "situation", ""), "当前会话上下文"),
+        _section("history", getattr(ctx, "history", ""), "最近对话历史"),
+        _section("input_event", getattr(ctx, "input_event", ""), "本轮对话触发"),
+    ]
+    return [
+        SystemMessage(content=DIRECT_DIALOGUE_SYSTEM_PROMPT),
+        HumanMessage(content="请输出这一轮台词。\n\n" + "\n".join(sections)),
+    ]
+
+
 _HISTORY_LINE_RE = re.compile(r"^(\[folded\])?\[(?P<speaker>[^\]]+)\] (?P<content>.*)$")
 
 
@@ -236,17 +310,17 @@ def _section(name: str, value: Any, label: str | None = None) -> str:
 
 def _with_label(value: Any, label: str | None) -> str:
     text = _none_if_empty(value)
-    if text == "(none)" or not label:
+    if text == EMPTY_PROMPT_TEXT or not label:
         return text
     return f"{label}：\n{text}"
 
 
 def _none_if_empty(value: Any) -> str:
     text = str(value).strip() if value is not None else ""
-    return text or "(none)"
+    return text or EMPTY_PROMPT_TEXT
 
 
 def _render_execution_results(results: list[dict[str, Any]]) -> str:
     if not results:
-        return "(none)"
+        return EMPTY_PROMPT_TEXT
     return json.dumps(results, ensure_ascii=False, indent=2, default=str)

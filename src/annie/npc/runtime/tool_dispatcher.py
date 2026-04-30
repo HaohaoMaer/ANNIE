@@ -9,6 +9,7 @@ After the Executor rewrite, the LLM picks tools natively via
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import logging
 from typing import TYPE_CHECKING, Any
@@ -49,6 +50,14 @@ class ToolDispatcher:
 
         ``tool_call`` must have ``name`` and ``args`` keys.
         """
+        return self.dispatch_result(tool_call, agent_context).content
+
+    def dispatch_result(
+        self,
+        tool_call: dict[str, Any],
+        agent_context: "AgentContext",
+    ) -> "ToolDispatchResult":
+        """Execute one tool_call and return structured dispatch metadata."""
         name = tool_call.get("name", "")
         args = tool_call.get("args", {}) or {}
         tool = self.tool_registry.get(name)
@@ -60,7 +69,12 @@ class ToolDispatcher:
                 ToolContext(agent_context=agent_context, runtime=self.runtime),
             )
         rendered = self._render(payload)
-        return _micro_compress(rendered)
+        return ToolDispatchResult(
+            tool=tool,
+            payload=payload,
+            rendered=rendered,
+            content=_micro_compress(rendered),
+        )
 
     # ---- internals -----------------------------------------------------
     def _render(self, payload: Any) -> str:
@@ -68,3 +82,11 @@ class ToolDispatcher:
             return json.dumps(payload, ensure_ascii=False, default=str)
         except (TypeError, ValueError):
             return str(payload)
+
+
+@dataclass(frozen=True)
+class ToolDispatchResult:
+    tool: Any | None
+    payload: Any
+    rendered: str
+    content: str

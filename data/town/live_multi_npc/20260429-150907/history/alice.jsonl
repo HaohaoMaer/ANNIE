@@ -1,0 +1,3 @@
+{"turn_id":1,"timestamp":"2026-04-29T07:09:14.031325+00:00","speaker":"alice","content":"已提交动作：interact_with","is_folded":false,"folded_from":null,"metadata":{"source":"town_dialogue","location_id":"home_alice","clock_minute":480}}
+{"turn_id":2,"timestamp":"2026-04-29T07:09:38.413274+00:00","speaker":"alice","content":"已提交动作：interact_with","is_folded":false,"folded_from":null,"metadata":{"source":"town_dialogue","location_id":"home_alice","clock_minute":490}}
+{"turn_id":3,"timestamp":"2026-04-29T07:10:08.239773+00:00","speaker":"alice","content":"已提交动作：finish_schedule_segment","is_folded":false,"folded_from":null,"metadata":{"source":"town_dialogue","location_id":"home_alice","clock_minute":500}}

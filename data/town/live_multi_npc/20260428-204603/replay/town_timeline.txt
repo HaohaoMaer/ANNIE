@@ -1,0 +1,18 @@
+[08:00] alice observe succeeded @ home_alice: 已观察当前本地小镇状态。
+[08:01] alice wait succeeded @ home_alice: alice 在 home_alice 等待 20 分钟。全局小镇时钟没有推进。
+[08:21] alice wait succeeded @ home_alice: alice 在 home_alice 等待 20 分钟。全局小镇时钟没有推进。
+[08:41] alice finish_schedule_segment succeeded @ home_alice: alice 已完成 08:00 开始、目标地点为 home_alice 的日程段。
+[08:41] alice eat_breakfast failed @ home_alice: 暂不支持小镇动作 'eat_breakfast'。
+[08:00] bob observe succeeded @ cafe: 已观察当前本地小镇状态。
+[08:01] bob interact_with succeeded @ cafe: bob 已与 咖啡馆柜台 交互。
+[08:06] bob interact_with succeeded @ cafe: bob 已与 咖啡馆柜台 交互。
+[08:11] bob interact_with succeeded @ cafe: bob 已与 咖啡馆柜台 交互。
+[08:16] bob observe succeeded @ cafe: 已观察当前本地小镇状态。
+[08:17] bob wait succeeded @ cafe: bob 在 cafe 等待 10 分钟。全局小镇时钟没有推进。
+[08:00] clara observe succeeded @ library: 已观察当前本地小镇状态。
+[08:01] clara interact_with succeeded @ library: clara 已与 书架 交互。
+[08:06] clara interact_with succeeded @ library: clara 已与 书架 交互。
+[08:11] clara wait succeeded @ library: clara 在 library 等待 30 分钟。全局小镇时钟没有推进。
+[08:41] clara interact_with succeeded @ library: clara 已与 书架 交互。
+[08:46] clara wait succeeded @ library: clara 在 library 等待 60 分钟。全局小镇时钟没有推进。
+[09:46] clara observe succeeded @ library: 已观察当前本地小镇状态。
