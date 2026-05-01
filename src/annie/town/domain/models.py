@@ -19,6 +19,16 @@ class TownClock:
 
 
 @dataclass
+class SemanticAffordance:
+    id: str
+    label: str
+    description: str = ""
+    duration_minutes: int = 5
+    aliases: list[str] = field(default_factory=list)
+    event_type: str = "interaction"
+
+
+@dataclass
 class Location:
     id: str
     name: str
@@ -27,6 +37,7 @@ class Location:
     exit_travel_minutes: dict[str, int] = field(default_factory=dict)
     object_ids: list[str] = field(default_factory=list)
     occupant_ids: list[str] = field(default_factory=list)
+    affordances: list[SemanticAffordance] = field(default_factory=list)
 
 
 @dataclass
@@ -36,6 +47,7 @@ class TownObject:
     location_id: str
     description: str = ""
     interactable: bool = True
+    affordances: list[SemanticAffordance] = field(default_factory=list)
 
 
 @dataclass
@@ -81,6 +93,7 @@ class ScheduleSegment:
     location_id: str
     intent: str
     subtasks: list[str] = field(default_factory=list)
+    day: int | None = None
 
     @property
     def end_minute(self) -> int:
@@ -119,6 +132,20 @@ class ResidentScratch:
 
 
 @dataclass
+class ResidentDayPlan:
+    day: int
+    currently: str = ""
+    wake_up_minute: int | None = None
+    daily_intentions: list[str] = field(default_factory=list)
+    planning_evidence: list[dict[str, object]] = field(default_factory=list)
+    validation: dict[str, object] = field(default_factory=dict)
+    schedule_summary: str = ""
+    day_summary: str = ""
+    started_minute: int | None = None
+    ended_minute: int | None = None
+
+
+@dataclass
 class ResidentSpatialMemory:
     known_location_ids: list[str] = field(default_factory=list)
     known_object_ids: list[str] = field(default_factory=list)
@@ -139,7 +166,7 @@ class TownPerceptionPolicy:
     max_events: int = 5
     max_objects: int = 5
     max_npcs: int = 5
-    max_exits: int = 5
+    max_exits: int = 4
     max_known_locations: int = 8
     max_known_objects: int = 8
 
@@ -151,6 +178,8 @@ class TownResidentState:
     schedule: list[ScheduleSegment] = field(default_factory=list)
     current_action: CurrentAction | None = None
     scratch: ResidentScratch = field(default_factory=ResidentScratch)
+    schedule_day: int | None = None
+    day_plans: dict[int, ResidentDayPlan] = field(default_factory=dict)
     spatial_memory: ResidentSpatialMemory = field(default_factory=ResidentSpatialMemory)
     poignancy: int = 0
     reflection_evidence: list[ReflectionEvidence] = field(default_factory=list)
@@ -162,6 +191,7 @@ class ScheduleCompletion:
     start_minute: int
     location_id: str
     note: str = ""
+    day: int | None = None
 
 
 @dataclass

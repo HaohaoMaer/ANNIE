@@ -139,6 +139,20 @@ def test_objects_are_bound_to_locations() -> None:
         assert obj.id in state.locations[obj.location_id].object_ids
 
 
+def test_small_town_fixture_has_expanded_semantic_affordances() -> None:
+    state = create_small_town_state()
+
+    assert {"market", "workshop", "park"} <= set(state.locations)
+    assert {"produce_stall", "repair_bench", "garden_plot"} <= set(state.objects)
+    assert state.locations["market"].affordances
+    assert state.objects["notice_board"].affordances
+    assert state.objects["cafe_counter"].affordances[0].id == "order_coffee"
+
+    for resident in state.residents.values():
+        assert "market" in resident.spatial_memory.known_location_ids
+        assert "repair_bench" in resident.spatial_memory.known_object_ids
+
+
 def test_move_updates_location_occupancy() -> None:
     state = create_small_town_state()
 
@@ -305,10 +319,12 @@ def test_town_world_engine_builds_minimal_agent_context(tmp_path) -> None:
     assert {tool.name for tool in context.tools} == {
         "plan_todo",
         "move_to",
-            "observe",
-            "speak_to",
-            "start_conversation",
-            "interact_with",
+        "observe",
+        "speak_to",
+        "start_conversation",
+        "interact_with",
+        "inspect_affordances",
+        "use_affordance",
         "wait",
         "finish_schedule_segment",
     }
@@ -422,6 +438,7 @@ def test_build_daily_planning_context_is_tool_free_and_town_owned(tmp_path) -> N
 
 def test_generate_day_plan_for_resident_accepts_agent_json(tmp_path) -> None:
     engine = _town_engine(tmp_path)
+    engine.state.set_location("alice", "town_square")
     agent = _PlanningAgent(
         json.dumps(
             {
@@ -461,6 +478,72 @@ def test_generate_day_plan_for_resident_accepts_agent_json(tmp_path) -> None:
     context = engine.build_context("alice", "开始 planning 后的新日程。")
     assert context.extra["town"]["current_schedule"]["intent"] == "查看公告板"
     assert "查看公告板" in context.situation
+
+
+def test_generate_day_plan_repairs_first_segment_that_requires_travel(tmp_path) -> None:
+    engine = _town_engine(tmp_path)
+    agent = _PlanningAgent(
+        json.dumps(
+            {
+                "schedule": [
+                    {
+                        "npc_id": "alice",
+                        "start_minute": 8 * 60,
+                        "duration_minutes": 30,
+                        "location_id": "cafe",
+                        "intent": "直接去咖啡馆",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        )
+    )
+
+    accepted = engine.generate_day_plan_for_resident(
+        "alice",
+        agent,
+        start_minute=8 * 60,
+        end_minute=9 * 60,
+    )
+
+    assert accepted[0].location_id == "cafe"
+    assert accepted[0].start_minute == 8 * 60 + 8
+    validation = engine.state.residents["alice"].day_plans[1].validation
+    assert "first_segment_requires_travel_repair" in validation["warnings"]
+
+
+def test_generate_day_plan_repairs_unreachable_first_segment(tmp_path) -> None:
+    engine = _town_engine(tmp_path)
+    engine.state.locations["home_alice"].exits.clear()
+    engine.state.locations["home_alice"].exit_travel_minutes.clear()
+    agent = _PlanningAgent(
+        json.dumps(
+            {
+                "schedule": [
+                    {
+                        "npc_id": "alice",
+                        "start_minute": 8 * 60,
+                        "duration_minutes": 30,
+                        "location_id": "cafe",
+                        "intent": "不可达的咖啡馆安排",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        )
+    )
+
+    accepted = engine.generate_day_plan_for_resident(
+        "alice",
+        agent,
+        start_minute=8 * 60,
+        end_minute=9 * 60,
+    )
+
+    assert accepted[0].location_id == "home_alice"
+    assert accepted[0].start_minute == 8 * 60
+    validation = engine.state.residents["alice"].day_plans[1].validation
+    assert "first_segment_unreachable_repaired" in validation["warnings"]
 
 
 def test_generate_day_plan_for_resident_accepts_json_embedded_in_text(tmp_path) -> None:

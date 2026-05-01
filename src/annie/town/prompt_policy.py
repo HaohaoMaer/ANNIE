@@ -55,7 +55,10 @@ def render_object_selection_hint(
 ) -> str:
     if not objects:
         return "当前位置没有可见物体；只能考虑可见 NPC、可达出口、wait 或 finish_schedule_segment。"
-    visible = ", ".join(f"{obj.name} ({obj.id})" for obj in objects)
+    visible = ", ".join(
+        f"{obj.name} ({obj.id}; affordances={_affordance_ids(obj)})"
+        for obj in objects
+    )
     if schedule is None:
         return f"对象选择只能从当前位置可见物体中选：{visible}。不要引用其他地点物体。"
 
@@ -311,8 +314,22 @@ def _relevant_visible_objects(intent: str, objects: Sequence[TownObject]) -> lis
     return [
         obj
         for obj in objects
-        if any(word in f"{obj.name} {obj.description} {obj.id}" for word in active)
+        if any(word in _object_affordance_text(obj) for word in active)
     ]
+
+
+def _affordance_ids(obj: TownObject) -> str:
+    if not obj.affordances:
+        return "none"
+    return ",".join(item.id for item in obj.affordances)
+
+
+def _object_affordance_text(obj: TownObject) -> str:
+    affordances = " ".join(
+        f"{item.id} {item.label} {item.description} {' '.join(item.aliases)}"
+        for item in obj.affordances
+    )
+    return f"{obj.name} {obj.description} {obj.id} {affordances}"
 
 
 def _looks_like_open_question(text: str) -> bool:

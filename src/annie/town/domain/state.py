@@ -47,10 +47,15 @@ class TownState:
             resident = self.residents.get(npc_id)
             if resident is None:
                 location_id = self.npc_locations.get(npc_id, "")
+                schedule = self.schedules.get(npc_id, [])
+                for segment in schedule:
+                    if segment.day is None:
+                        segment.day = self.clock.day
                 resident = TownResidentState(
                     npc_id=npc_id,
                     location_id=location_id,
-                    schedule=self.schedules.get(npc_id, []),
+                    schedule=schedule,
+                    schedule_day=self.clock.day if schedule else None,
                     current_action=self.current_actions.get(npc_id),
                 )
                 self.residents[npc_id] = resident
@@ -59,6 +64,11 @@ class TownState:
                 resident.location_id = self.npc_locations[npc_id]
             if not resident.schedule and npc_id in self.schedules:
                 resident.schedule = self.schedules[npc_id]
+            if resident.schedule_day is None and resident.schedule:
+                resident.schedule_day = self.clock.day
+            for segment in resident.schedule:
+                if segment.day is None:
+                    segment.day = resident.schedule_day
             if resident.current_action is None and npc_id in self.current_actions:
                 resident.current_action = self.current_actions[npc_id]
 
@@ -147,7 +157,13 @@ class TownState:
             resident.current_action = None
         self.current_actions.pop(npc_id, None)
 
-    def set_schedule(self, npc_id: str, schedule: list[ScheduleSegment]) -> None:
+    def set_schedule(
+        self,
+        npc_id: str,
+        schedule: list[ScheduleSegment],
+        *,
+        day: int | None = None,
+    ) -> None:
         resident = self.residents.get(npc_id)
         if resident is None:
             resident = TownResidentState(
@@ -155,7 +171,11 @@ class TownState:
                 location_id=self.npc_locations.get(npc_id, ""),
             )
             self.residents[npc_id] = resident
+        schedule_day = self.clock.day if day is None else day
+        for segment in schedule:
+            segment.day = schedule_day
         resident.schedule = schedule
+        resident.schedule_day = schedule_day
         self._sync_legacy_for_resident(npc_id)
 
     def sync_occupants(self) -> None:
@@ -259,6 +279,13 @@ class TownState:
         npc_id: str,
         minute: int | None = None,
     ) -> ScheduleSegment | None:
+        resident = self.residents.get(npc_id)
+        if (
+            resident is not None
+            and resident.schedule_day is not None
+            and resident.schedule_day != self.clock.day
+        ):
+            return None
         check_minute = self.clock.minute if minute is None else minute
         for segment in self.schedule_for(npc_id):
             if segment.contains(check_minute):
@@ -279,11 +306,14 @@ class TownState:
             start_minute=target.start_minute,
             location_id=target.location_id,
             note=note,
+            day=self.clock.day,
         )
         existing = self.completed_schedule_segments.setdefault(npc_id, [])
         for item in existing:
-            if item.start_minute == completion.start_minute:
+            item_day = self.clock.day if item.day is None else item.day
+            if item.start_minute == completion.start_minute and item_day == self.clock.day:
                 item.note = note or item.note
+                item.day = self.clock.day
                 return item
         existing.append(completion)
         return completion
@@ -291,6 +321,8 @@ class TownState:
     def is_schedule_segment_complete(self, npc_id: str, segment: ScheduleSegment) -> bool:
         return any(
             item.start_minute == segment.start_minute
+            and (self.clock.day if item.day is None else item.day)
+            == (self.clock.day if segment.day is None else segment.day)
             for item in self.completed_schedule_segments.get(npc_id, [])
         )
 

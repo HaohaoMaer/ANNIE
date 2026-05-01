@@ -32,10 +32,25 @@ class TownMultiNpcRunResult:
     ticks: list[TownTickTrace]
     replay_paths: dict[str, Path] = field(default_factory=dict)
     note: str = ""
+    reached_end_minute: bool = False
+    all_current_schedules_complete: bool = False
+    max_ticks_exhausted: bool = False
 
     @property
     def ok(self) -> bool:
         return not self.note
+
+
+@dataclass
+class TownMultiDayRunResult:
+    npc_ids: list[str]
+    days: list[TownMultiNpcRunResult]
+    replay_paths: dict[str, Path] = field(default_factory=dict)
+    note: str = ""
+
+    @property
+    def ok(self) -> bool:
+        return not self.note and all(day.ok for day in self.days)
 
 
 def run_multi_npc_day(
@@ -56,8 +71,14 @@ def run_multi_npc_day(
 
     traces: list[TownTickTrace] = []
     note = ""
+    reached_end_minute = end_minute is not None and engine.state.clock.minute >= end_minute
+    all_current_schedules_complete = (
+        end_minute is None and _all_current_schedules_complete(engine, active_npcs)
+    )
+    max_ticks_exhausted = False
     for _ in range(max_ticks):
         if end_minute is not None and engine.state.clock.minute >= end_minute:
+            reached_end_minute = True
             break
         before_actions = len(engine.action_log)
         before_reflections = len(engine.reflection_log)
@@ -93,11 +114,16 @@ def run_multi_npc_day(
             and not records
             and _all_current_schedules_complete(engine, active_npcs)
         ):
+            all_current_schedules_complete = True
             break
         if end_minute is not None and engine.state.clock.minute >= end_minute:
+            reached_end_minute = True
             break
     else:
-        if end_minute is None or engine.state.clock.minute < end_minute:
+        reached_end_minute = end_minute is not None and engine.state.clock.minute >= end_minute
+        all_current_schedules_complete = _all_current_schedules_complete(engine, active_npcs)
+        if not reached_end_minute and not (end_minute is None and all_current_schedules_complete):
+            max_ticks_exhausted = True
             note = f"达到 max_ticks={max_ticks}，多 NPC 小镇运行仍未结束。"
 
     replay_paths: dict[str, Path] = {}
@@ -106,6 +132,59 @@ def run_multi_npc_day(
     return TownMultiNpcRunResult(
         npc_ids=active_npcs,
         ticks=traces,
+        replay_paths=replay_paths,
+        note=note,
+        reached_end_minute=reached_end_minute,
+        all_current_schedules_complete=all_current_schedules_complete,
+        max_ticks_exhausted=max_ticks_exhausted,
+    )
+
+
+def run_multi_npc_days(
+    engine: TownWorldEngine,
+    agent: TownAgent,
+    npc_ids: list[str] | None = None,
+    *,
+    days: int = 2,
+    start_minute: int = 8 * 60,
+    end_minute: int = 10 * 60,
+    max_ticks_per_day: int = 24,
+    replay_dir: str | Path | None = None,
+    reflection_agent: TownAgent | None = None,
+) -> TownMultiDayRunResult:
+    """Run a deterministic lifecycle wrapper around repeated town day ticks."""
+    active_npcs = list(npc_ids) if npc_ids is not None else engine.state.resident_ids()
+    day_results: list[TownMultiNpcRunResult] = []
+    note = ""
+    for offset in range(days):
+        day = offset + 1
+        engine.start_day_for_residents(
+            active_npcs,
+            day=day,
+            start_minute=start_minute,
+            end_minute=end_minute,
+        )
+        result = run_multi_npc_day(
+            engine,
+            agent,
+            active_npcs,
+            start_minute=start_minute,
+            end_minute=end_minute,
+            max_ticks=max_ticks_per_day,
+            reflection_agent=reflection_agent,
+        )
+        day_results.append(result)
+        engine.end_day_for_residents(active_npcs, day=day)
+        if not result.ok:
+            note = result.note
+            break
+
+    replay_paths: dict[str, Path] = {}
+    if replay_dir is not None:
+        replay_paths = engine.write_replay_artifacts(replay_dir)
+    return TownMultiDayRunResult(
+        npc_ids=active_npcs,
+        days=day_results,
         replay_paths=replay_paths,
         note=note,
     )

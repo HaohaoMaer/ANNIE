@@ -42,6 +42,19 @@ class InteractWithInput(BaseModel):
     intent: str = Field(..., min_length=1, description="本次交互的目的或动作描述。")
 
 
+class InspectAffordancesInput(BaseModel):
+    target_id: str | None = Field(
+        None,
+        description="可选的当前位置物体 id；留空时查看当前位置所有地点/物体 affordance。",
+    )
+
+
+class UseAffordanceInput(BaseModel):
+    target_id: str = Field(..., description="当前位置或当前位置可见物体的 id。")
+    affordance_id: str = Field(..., description="要执行的 affordance id。")
+    note: str = Field("", description="本次执行的简短语义说明。")
+
+
 class MoveToTool(ToolDef):
     name = "move_to"
     description = (
@@ -179,6 +192,48 @@ class InteractWithTool(ToolDef):
     def call(self, input: BaseModel | dict, ctx: ToolContext) -> Any:
         inp = _coerce(input, InteractWithInput)
         result = self._interact_with(inp.object_id, inp.intent)
+        ctx.runtime.setdefault("action_results", []).append(result)
+        return result.model_dump()
+
+
+class InspectAffordancesTool(ToolDef):
+    name = "inspect_affordances"
+    description = (
+        "查看当前位置和可见物体支持的结构化 affordance。"
+        "这是只读工具，用于不确定对象能做什么时确认可用动作。"
+    )
+    input_schema = InspectAffordancesInput
+    is_read_only = True
+
+    def __init__(self, inspect_affordances: Callable[[str | None], ActionResult]) -> None:
+        self._inspect_affordances = inspect_affordances
+
+    def call(self, input: BaseModel | dict, ctx: ToolContext) -> Any:
+        inp = _coerce(input, InspectAffordancesInput)
+        result = self._inspect_affordances(inp.target_id)
+        ctx.runtime.setdefault("action_results", []).append(result)
+        return result.model_dump()
+
+
+class UseAffordanceTool(ToolDef):
+    name = "use_affordance"
+    description = (
+        "对当前位置或当前位置可见物体执行明确支持的 affordance。"
+        "target_id 必须是当前位置 id 或可见物体 id；affordance_id 必须来自上下文列出的选项。"
+    )
+    input_schema = UseAffordanceInput
+    is_read_only = False
+    ends_activation_on_success = True
+
+    def __init__(
+        self,
+        use_affordance: Callable[[str, str, str], ActionResult],
+    ) -> None:
+        self._use_affordance = use_affordance
+
+    def call(self, input: BaseModel | dict, ctx: ToolContext) -> Any:
+        inp = _coerce(input, UseAffordanceInput)
+        result = self._use_affordance(inp.target_id, inp.affordance_id, inp.note)
         ctx.runtime.setdefault("action_results", []).append(result)
         return result.model_dump()
 

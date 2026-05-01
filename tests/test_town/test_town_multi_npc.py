@@ -24,6 +24,7 @@ from annie.town import (
     TownObject,
     TownPerceptionPolicy,
     TownWorldEngine,
+    run_multi_npc_days,
     create_small_town_state,
     run_multi_npc_day,
 )
@@ -738,6 +739,84 @@ def test_speak_and_interact_tools_return_structured_observations(tmp_path) -> No
     assert failed["result"]["reason"] == "object_not_visible"
 
 
+def test_affordance_context_and_tools_are_semantic_not_map_backed(tmp_path) -> None:
+    engine = _town_engine(tmp_path)
+    engine.state.move_npc("alice", "town_square")
+    context = engine.build_context("alice", "查看公告栏。")
+    tool_context = ToolContext(agent_context=context, runtime={})
+    town = context.extra["town"]
+
+    assert "location_affordances" in town
+    assert "object_affordances" in town
+    assert town["object_affordances"]["notice_board"][0]["id"] == "read_notices"
+    assert "tile" not in str(town["perception"]).lower()
+    assert "map" not in str(town["perception"]).lower()
+    assert "affordances=阅读公告(read_notices)" in context.situation
+
+    inspected = _tool(context, "inspect_affordances").safe_call(
+        {"target_id": "notice_board"},
+        tool_context,
+    )
+    used = _tool(context, "use_affordance").safe_call(
+        {
+            "target_id": "notice_board",
+            "affordance_id": "post_notice",
+            "note": "咖啡馆今天九点有新豆试饮。",
+        },
+        tool_context,
+    )
+
+    assert inspected["success"] is True
+    assert inspected["result"]["facts"]["targets"][0]["affordances"][0]["id"] == "read_notices"
+    assert used["success"] is True
+    assert used["result"]["status"] == "succeeded"
+    assert used["result"]["facts"]["target_kind"] == "object"
+    assert used["result"]["facts"]["affordance_id"] == "post_notice"
+    assert used["result"]["facts"]["duration_minutes"] == 5
+    assert engine.state.events[-1].event_type == "notice"
+    assert engine.action_log[-1]["action_type"] == "use_affordance"
+
+
+def test_affordance_tools_reject_unknown_and_unsupported_without_state_change(tmp_path) -> None:
+    engine = _town_engine(tmp_path)
+    engine.state.move_npc("alice", "town_square")
+    context = engine.build_context("alice", "尝试错误 affordance。")
+    tool_context = ToolContext(agent_context=context, runtime={})
+    event_count = len(engine.state.events)
+    action_count = len(engine.action_log)
+
+    unsupported = _tool(context, "use_affordance").safe_call(
+        {
+            "target_id": "notice_board",
+            "affordance_id": "brew_coffee",
+            "note": "尝试在公告栏煮咖啡。",
+        },
+        tool_context,
+    )
+    unknown_target = _tool(context, "use_affordance").safe_call(
+        {
+            "target_id": "missing_kiosk",
+            "affordance_id": "read_notices",
+        },
+        tool_context,
+    )
+    free_text_unsupported = _tool(context, "interact_with").safe_call(
+        {"object_id": "notice_board", "intent": "煮咖啡"},
+        tool_context,
+    )
+
+    assert unsupported["result"]["status"] == "failed"
+    assert unsupported["result"]["reason"] == "unsupported_affordance"
+    assert "available_affordances" in unsupported["result"]["facts"]
+    assert unknown_target["result"]["status"] == "failed"
+    assert unknown_target["result"]["reason"] == "target_not_visible"
+    assert free_text_unsupported["result"]["status"] == "failed"
+    assert free_text_unsupported["result"]["reason"] == "unsupported_affordance"
+    assert len(engine.state.events) == event_count
+    assert len(engine.action_log) == action_count + 3
+    assert all(item["status"] == "failed" for item in engine.action_log[-3:])
+
+
 def test_speak_to_same_direction_has_short_cooldown(tmp_path) -> None:
     engine = _town_engine(tmp_path)
     engine.state.move_npc("alice", "town_square")
@@ -997,6 +1076,228 @@ def test_multi_npc_day_defaults_to_resident_ids(tmp_path) -> None:
     assert result.npc_ids == engine.state.resident_ids()
 
 
+def test_start_day_renews_schedule_and_keeps_state_town_owned(tmp_path) -> None:
+    engine = _town_engine(tmp_path)
+    original_agent = object()
+    engine.state.clock.day = 2
+
+    assert engine.state.current_schedule_segment("alice") is None
+
+    accepted = engine.start_day_for_resident(
+        "alice",
+        day=2,
+        start_minute=8 * 60,
+        end_minute=10 * 60,
+    )
+    resident = engine.state.residents["alice"]
+
+    assert accepted
+    assert resident.schedule_day == 2
+    assert all(segment.day == 2 for segment in accepted)
+    assert resident.scratch.currently
+    assert resident.day_plans[2].wake_up_minute == 8 * 60
+    assert resident.day_plans[2].daily_intentions
+    assert engine.state.current_schedule_segment("alice") is not None
+    assert not hasattr(original_agent, "schedule")
+    assert any(item["stage"] == "accepted_schedule" for item in engine.planning_log)
+
+
+def test_start_day_clears_previous_day_current_action(tmp_path) -> None:
+    engine = _town_engine(tmp_path)
+    engine.state.set_current_action(
+        "alice",
+        CurrentAction(
+            npc_id="alice",
+            action_type="wait",
+            location_id="home_alice",
+            start_minute=8 * 60,
+            duration_minutes=35,
+            status="waiting",
+        ),
+    )
+
+    engine.start_day_for_resident(
+        "alice",
+        day=2,
+        start_minute=8 * 60,
+        end_minute=9 * 60,
+    )
+    assert engine.state.current_action_for("alice") is None
+
+    result = run_multi_npc_day(
+        engine,
+        _SmallTownDrivingAgent(),
+        ["alice"],
+        start_minute=8 * 60,
+        end_minute=9 * 60,
+        max_ticks=8,
+    )
+
+    assert result.ticks[0].skipped_npc_ids == []
+    assert result.ticks[0].ran_npc_ids == ["alice"]
+
+
+def test_day_end_summary_is_distilled_memory(tmp_path) -> None:
+    engine = _town_engine(tmp_path)
+    engine.start_day_for_resident("alice", day=1, start_minute=8 * 60, end_minute=9 * 60)
+    engine.finish_schedule_segment("alice", "完成第一段")
+
+    summary = engine.end_day_for_resident("alice", day=1)
+
+    assert "第 1 天" in summary
+    records = engine.memory_for("alice").grep(
+        "",
+        category="impression",
+        metadata_filters={"source": "town_day_summary", "day": 1},
+    )
+    assert len(records) == 1
+    assert "完成" in records[0].content
+
+
+def test_decompose_and_revise_active_segment_preserves_completion_evidence(tmp_path) -> None:
+    engine = _town_engine(tmp_path)
+    subtasks = engine.decompose_current_schedule_segment("alice")
+
+    assert subtasks
+    assert engine.state.current_schedule_segment("alice").subtasks == subtasks
+
+    engine.finish_schedule_segment("alice", "早餐完成")
+    engine.state.clock.minute = 9 * 60
+    revised = engine.revise_current_schedule_segment(
+        "alice",
+        reason="waiting",
+        subtasks=["询问咖啡是否备好", "完成后调用 finish_schedule_segment"],
+    )
+
+    assert revised is not None
+    assert revised.intent == "买咖啡"
+    assert "revision:waiting" in revised.subtasks
+    assert engine.state.completed_schedule_segments["alice"][0].start_minute == 8 * 60
+    revision_logs = [
+        item for item in engine.planning_log if item["stage"] == "schedule_revision"
+    ]
+    assert revision_logs
+    assert revision_logs[-1]["completed_evidence"][0]["start_minute"] == 8 * 60
+
+
+def test_loop_guards_record_failed_actions_chatter_and_schedule_drift(tmp_path) -> None:
+    engine = _town_engine(tmp_path)
+
+    for _ in range(3):
+        engine.move_to("alice", "clinic")
+    assert any(
+        event["guard_type"] == "repeated_failed_action"
+        for event in engine.loop_guard_events
+    )
+
+    engine.state.set_location("alice", "town_square")
+    engine.state.move_npc("bob", "town_square")
+    engine.speak_cooldown_minutes = 0
+    for text in ["一句话一", "一句话二", "一句话三"]:
+        engine.speak_to("alice", "bob", text)
+    assert any(
+        event["guard_type"] == "repeated_low_value_action"
+        for event in engine.loop_guard_events
+    )
+
+    engine.plan_day_for_resident(
+        "alice",
+        [
+            ScheduleSegment(
+                npc_id="alice",
+                start_minute=8 * 60,
+                duration_minutes=60,
+                location_id="cafe",
+                intent="买咖啡",
+            )
+        ],
+    )
+    engine.state.set_location("alice", "home_alice")
+    engine.state.clock.minute = 8 * 60 + 40
+    engine.wait("alice", 5)
+
+    context = engine.build_context("alice", "检查是否偏离日程。")
+
+    assert any(
+        event["guard_type"] == "schedule_drift"
+        for event in engine.loop_guard_events
+    )
+    assert context.extra["town"]["loop_guard_events"]
+    assert "最近 guard" in context.extra["town"]["prompt_policy"]["repeat_guard_hint"]
+
+
+def test_multi_day_runner_replays_schedule_planning_evidence(tmp_path) -> None:
+    engine = _town_engine(tmp_path)
+
+    result = run_multi_npc_days(
+        engine,
+        _SmallTownDrivingAgent(),
+        ["alice"],
+        days=2,
+        start_minute=8 * 60,
+        end_minute=9 * 60,
+        max_ticks_per_day=8,
+        replay_dir=tmp_path / "replay",
+    )
+
+    checkpoint_rows = [
+        json.loads(line)
+        for line in result.replay_paths["checkpoints"].read_text().splitlines()
+    ]
+    final_snapshot = checkpoint_rows[-1]["snapshot"]
+
+    assert result.ok is True
+    assert engine.state.residents["alice"].schedule_day == 2
+    assert final_snapshot["planning_checkpoints"]
+    assert any(
+        item["stage"] == "accepted_schedule" and item["day"] == 2
+        for item in final_snapshot["planning_checkpoints"]
+    )
+    assert final_snapshot["residents"]["alice"]["day_plan"]["day"] == 2
+    assert "planning" in result.replay_paths["timeline"].read_text()
+
+
+def test_forced_guard_check_does_not_pollute_real_replay(tmp_path) -> None:
+    from scripts.validate_townworld_phase1_multiday_real_llm import (
+        CheckBoard,
+        force_revision_and_loop_guards,
+    )
+
+    engine = _town_engine(tmp_path / "real")
+    result = run_multi_npc_day(
+        engine,
+        _SmallTownDrivingAgent(),
+        ["alice"],
+        start_minute=8 * 60,
+        end_minute=9 * 60,
+        max_ticks=8,
+        replay_dir=tmp_path / "real_replay",
+    )
+    checkpoint_rows = [
+        json.loads(line)
+        for line in result.replay_paths["checkpoints"].read_text().splitlines()
+    ]
+
+    assert result.ok is True
+    assert engine.loop_guard_events == []
+    assert checkpoint_rows[-1]["snapshot"]["loop_guard_events"] == []
+
+    forced = force_revision_and_loop_guards(
+        "alice",
+        CheckBoard(),
+        run_dir=tmp_path / "forced",
+    )
+    replay_paths = engine.write_replay_artifacts(tmp_path / "real_replay_after_forced")
+    final_rows = [
+        json.loads(line)
+        for line in replay_paths["checkpoints"].read_text().splitlines()
+    ]
+
+    assert forced["forced_guard_check_count"] > 0
+    assert engine.loop_guard_events == []
+    assert final_rows[-1]["snapshot"]["loop_guard_events"] == []
+
+
 def _run_replay_signature(tmp_path: Path) -> list[dict[str, object]]:
     engine = _town_engine(tmp_path)
     result = run_multi_npc_day(
@@ -1117,6 +1418,48 @@ def test_multi_npc_day_breaks_when_end_minute_reached_on_last_tick(tmp_path) -> 
     assert result.note == ""
     assert engine.state.clock.minute == 10 * 60
     assert len(result.ticks) == 12
+    assert result.reached_end_minute is True
+    assert result.max_ticks_exhausted is False
+
+
+def test_multi_npc_day_reports_completion_and_tick_exhaustion(tmp_path) -> None:
+    complete_engine = _town_engine(tmp_path / "complete")
+    complete_engine.plan_day_for_resident(
+        "alice",
+        [
+            ScheduleSegment(
+                npc_id="alice",
+                start_minute=8 * 60,
+                duration_minutes=30,
+                location_id="town_square",
+                intent="查看公告板",
+            )
+        ],
+    )
+    complete_result = run_multi_npc_day(
+        complete_engine,
+        _SmallTownDrivingAgent(),
+        ["alice"],
+        start_minute=8 * 60,
+        max_ticks=4,
+    )
+
+    exhausted_engine = _town_engine(tmp_path / "exhausted")
+    exhausted_result = run_multi_npc_day(
+        exhausted_engine,
+        _NoopAgent(),
+        ["alice"],
+        start_minute=8 * 60,
+        end_minute=9 * 60,
+        max_ticks=1,
+    )
+
+    assert complete_result.ok is True
+    assert complete_result.all_current_schedules_complete is True
+    assert complete_result.max_ticks_exhausted is False
+    assert exhausted_result.ok is False
+    assert exhausted_result.max_ticks_exhausted is True
+    assert exhausted_result.reached_end_minute is False
 
 
 def test_start_conversation_closes_session_and_does_not_ping_pong(tmp_path) -> None:
@@ -1185,6 +1528,10 @@ def test_start_conversation_closes_session_and_does_not_ping_pong(tmp_path) -> N
     assert impression.metadata["location_id"] == "cafe"
     assert impression.metadata["close_reason"] == "natural_close"
     assert impression.metadata["topic_or_reason"] == "咖啡推荐"
+    assert impression.metadata["relationship_pair_key"] == "alice|bob"
+    assert "alice" in str(impression.metadata["relationship_summary"])
+    assert "bob" in str(impression.metadata["relationship_summary"])
+    assert "咖啡推荐" in str(impression.metadata["follow_up_intentions"])
     assert "alice:" not in impression.content
     assert "bob:" not in impression.content
     assert "conversation is ongoing via" not in impression.content
@@ -1200,6 +1547,20 @@ def test_start_conversation_closes_session_and_does_not_ping_pong(tmp_path) -> N
     assert alice_evidence.metadata["location_id"] == "cafe"
     assert alice_evidence.metadata["close_reason"] == "natural_close"
     assert alice_evidence.metadata["topic_or_reason"] == "咖啡推荐"
+    assert alice_evidence.metadata["relationship_pair_key"] == "alice|bob"
+    assert "咖啡推荐" in str(alice_evidence.metadata["follow_up_intentions"])
+
+    alice_followups = engine.memory_for("alice").grep(
+        "",
+        category="todo",
+        metadata_filters={
+            "source": "town_conversation_followup",
+            "partner_npc_id": "bob",
+            "status": "open",
+        },
+    )
+    assert alice_followups
+    assert "Bob" in alice_followups[0].content
 
     history_entries = engine.history_for("alice").read_last(1)
     assert history_entries[0].speaker == "town_conversation"
@@ -1219,6 +1580,24 @@ def test_start_conversation_closes_session_and_does_not_ping_pong(tmp_path) -> N
     assert cue["impressions"] == [impression.content]
     assert "关系线索：bob" in later_context.situation
     assert "冷却" in later_context.extra["town"]["prompt_policy"]["conversation_policy_hint"]
+
+    planning_context = engine.build_daily_planning_context(
+        "alice",
+        start_minute=9 * 60,
+        end_minute=10 * 60,
+    )
+    assert planning_context.extra["town"]["relationship_evidence"]
+    assert "可用于改变今日计划的关系/对话证据" in planning_context.situation
+    assert "follow_up=" in planning_context.situation
+
+    engine.state.clock.day = 2
+    day2_schedule = engine.start_day_for_resident(
+        "alice",
+        day=2,
+        start_minute=9 * 60,
+        end_minute=10 * 60,
+    )
+    assert day2_schedule[0].intent.startswith("跟进与 bob 的话题")
 
     engine.state.clock.minute = engine.state.current_actions["bob"].end_minute
     second_records = engine.step(agent, ["bob"])
@@ -1299,6 +1678,50 @@ def test_reflection_due_context_and_successful_memory_write(tmp_path) -> None:
     assert "schedule" in str(reflection.metadata["evidence_types"])
     assert "urgent_reflection" not in reflection.content
     assert "episodic" not in {record.category for record in reflections}
+
+    planning_context = engine.build_daily_planning_context(
+        "alice",
+        start_minute=9 * 60,
+        end_minute=10 * 60,
+    )
+    assert any(
+        item["metadata"].get("source") == "town_reflection"
+        for item in planning_context.extra["town"]["planning_evidence"]
+    )
+    assert "紧急事件会打乱日程" in planning_context.situation
+
+
+def test_conversation_or_reflection_evidence_changes_next_day_schedule(tmp_path) -> None:
+    engine = _town_engine(tmp_path)
+    baseline_intent = engine.state.schedule_for("alice")[0].intent
+    engine.memory_for("alice").remember(
+        "跟进与 Bob 的话题：确认咖啡馆晨间推荐",
+        category="todo",
+        metadata={
+            "source": "town_conversation_followup",
+            "status": "open",
+            "todo_id": "conversation_followup_test",
+            "partner_npc_id": "bob",
+            "conversation_session_id": "conversation_test",
+        },
+    )
+    engine.memory_for("alice").remember(
+        "Alice 认识到早晨应先处理昨天遗留的社交承诺。",
+        category="reflection",
+        metadata={"source": "town_reflection", "trigger_poignancy": 7},
+    )
+
+    day2_schedule = engine.start_day_for_resident(
+        "alice",
+        day=2,
+        start_minute=8 * 60,
+        end_minute=9 * 60,
+    )
+    day_plan = engine.state.residents["alice"].day_plans[2]
+
+    assert day2_schedule[0].intent != baseline_intent
+    assert day2_schedule[0].intent == "跟进与 Bob 的话题：确认咖啡馆晨间推荐"
+    assert any("社交承诺" in item["content"] for item in day_plan.planning_evidence)
 
 
 def test_npca_agent_reflection_context_uses_single_direct_llm_call(tmp_path) -> None:
