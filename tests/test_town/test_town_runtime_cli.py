@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -12,12 +13,14 @@ def test_run_town_runtime_cli_parses_core_options() -> None:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
 
+    run_root = Path(tempfile.gettempdir()) / "town-runs"
+
     args = module.build_parser().parse_args(
         [
             "--run-id",
             "cli-smoke",
             "--run-root",
-            "/tmp/town-runs",
+            str(run_root),
             "--resume",
             "--npc-id",
             "alice",
@@ -33,7 +36,7 @@ def test_run_town_runtime_cli_parses_core_options() -> None:
     )
 
     assert args.run_id == "cli-smoke"
-    assert args.run_root == Path("/tmp/town-runs")
+    assert args.run_root == run_root
     assert args.resume is True
     assert args.npc_ids == ["alice", "bob"]
     assert args.end_minute == 600
@@ -48,10 +51,12 @@ def test_real_llm_validation_cli_accepts_multiple_npc_ids() -> None:
     sys.modules["validate_real_llm"] = module
     spec.loader.exec_module(module)
 
+    output_dir = Path(tempfile.gettempdir()) / "town-real-llm"
+
     args = module.build_parser().parse_args(
         [
             "--output-dir",
-            "/tmp/town-real-llm",
+            str(output_dir),
             "--npc-id",
             "alice",
             "--npc-id",
@@ -66,7 +71,7 @@ def test_real_llm_validation_cli_accepts_multiple_npc_ids() -> None:
         ]
     )
 
-    assert args.output_dir == Path("/tmp/town-real-llm")
+    assert args.output_dir == output_dir
     assert args.npc_ids == ["alice", "bob"]
     assert args.days == 2
     assert args.end_minute == 600

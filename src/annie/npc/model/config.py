@@ -63,7 +63,7 @@ def load_model_config(path: str | Path = "config/model_config.yaml") -> ModelCon
     if not path.exists():
         raise FileNotFoundError(f"Config file not found: {path}")
 
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         raw = importlib.import_module("yaml").safe_load(f)
 
     return ModelConfig(**raw)
