@@ -14,11 +14,12 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any
 
+from annie.npc.core.response import ActionResult, ToolExecutionStatus
 from annie.npc.tools.base_tool import ToolContext
 from annie.npc.tools.tool_registry import ToolRegistry
 
 if TYPE_CHECKING:
-    from annie.npc.context import AgentContext
+    from annie.npc.core.context import AgentContext
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,8 @@ class ToolDispatcher:
         """Execute one tool_call and return structured dispatch metadata."""
         name = tool_call.get("name", "")
         args = tool_call.get("args", {}) or {}
+        call_id = tool_call.get("id")
+        action_results_before = len(self.runtime.get("action_results") or [])
         tool = self.tool_registry.get(name)
         if tool is None:
             payload = {"tool": name, "success": False, "error": "tool not found"}
@@ -68,6 +71,17 @@ class ToolDispatcher:
                 args,
                 ToolContext(agent_context=agent_context, runtime=self.runtime),
             )
+            new_statuses = self._record_tool_statuses(
+                tool_name=name,
+                call_id=str(call_id) if call_id else None,
+                action_results_before=action_results_before,
+            )
+            if new_statuses and isinstance(payload, dict) and payload.get("success") is True:
+                payload["result"] = (
+                    new_statuses[0].model_dump()
+                    if len(new_statuses) == 1
+                    else [status.model_dump() for status in new_statuses]
+                )
         rendered = self._render(payload)
         return ToolDispatchResult(
             tool=tool,
@@ -75,6 +89,40 @@ class ToolDispatcher:
             rendered=rendered,
             content=_micro_compress(rendered),
         )
+
+    def _record_tool_statuses(
+        self,
+        *,
+        tool_name: str,
+        call_id: str | None,
+        action_results_before: int,
+    ) -> list[ToolExecutionStatus]:
+        action_results = self.runtime.get("action_results") or []
+        new_results = action_results[action_results_before:]
+        statuses = self.runtime.setdefault("tool_statuses", [])
+        added: list[ToolExecutionStatus] = []
+        for result in new_results:
+            if isinstance(result, ActionResult):
+                status = ToolExecutionStatus.from_action_result(
+                    result,
+                    tool_name=tool_name,
+                    call_id=call_id,
+                )
+                statuses.append(status)
+                added.append(status)
+            elif isinstance(result, dict):
+                try:
+                    parsed = ActionResult(**result)
+                except Exception:
+                    continue
+                status = ToolExecutionStatus.from_action_result(
+                    parsed,
+                    tool_name=tool_name,
+                    call_id=call_id,
+                )
+                statuses.append(status)
+                added.append(status)
+        return added
 
     # ---- internals -----------------------------------------------------
     def _render(self, payload: Any) -> str:

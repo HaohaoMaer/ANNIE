@@ -29,9 +29,14 @@ def render_schedule_decision_hint(
     is_complete: bool,
 ) -> str:
     if schedule is None:
-        return "当前没有日程段；不要调用 finish_schedule_segment，除非世界引擎明确要求。"
+        return "当前没有日程段；不要调用 complete_current_schedule，除非世界引擎明确要求。"
     if is_complete:
         return "当前日程段已经完成；除非有待处理直接事件，不需要继续行动。"
+    if schedule.completion_policy == "explicit":
+        return (
+            f"当前活动“{schedule.intent}”需要显式完成；先执行直接相关行动，"
+            "证据充分或无法继续时再调用 complete_current_schedule。"
+        )
 
     subtasks = schedule.subtasks or default_subtasks_for(schedule)
     remaining = max(0, schedule.end_minute - clock_minute)
@@ -40,7 +45,7 @@ def render_schedule_decision_hint(
     return (
         f"当前活动“{schedule.intent}”是默认优先目标；"
         "除非紧急事件、直接请求或确认不会影响按时完成，不要偏离日程。"
-        "先判断是否已满足，再选择行动。"
+        "选择一个具体世界行动；完成判定由 TownWorldEngine 根据最终行动证据处理。"
         f"建议子任务：{subtasks_text}。"
         f"{completion}"
         f"已完成行动：{progress_summary}。"
@@ -54,7 +59,7 @@ def render_object_selection_hint(
     objects: Sequence[TownObject],
 ) -> str:
     if not objects:
-        return "当前位置没有可见物体；只能考虑可见 NPC、可达出口、wait 或 finish_schedule_segment。"
+        return "当前位置没有可见物体；只能考虑可见 NPC、可达出口或 wait。"
     visible = ", ".join(
         f"{obj.name} ({obj.id}; affordances={_affordance_ids(obj)})"
         for obj in objects
@@ -71,7 +76,7 @@ def render_object_selection_hint(
         )
     return (
         f"对象选择只能从当前位置 {location.id} 的可见物体中选：{visible}。"
-        f"若这些物体都不服务于“{schedule.intent}”，优先移动到日程目标地点或结束已满足日程。"
+        f"若这些物体都不服务于“{schedule.intent}”，优先移动到日程目标地点或选择更直接的可见行动。"
     )
 
 
@@ -110,15 +115,15 @@ def render_conversation_policy_hint(
     relationship = _relationship_cue_summary(relationship_cues)
     if active_session_id:
         return (
-            f"当前已在会话 {active_session_id} 中。start_conversation 不应重复发起；"
+            f"当前已在会话 {active_session_id} 中。talk_to 不应重复发起；"
             f"关系线索：{relationship}。"
             f"对话终止判断：{close_hint}"
         )
     return (
         f"可对话 NPC：{visible}。最近对话：{recent}。"
         f"关系线索：{relationship}。"
-        "speak_to 只发一句，收到 speak_to 后最多直接回复一次；"
-        "需要多轮交流才用 start_conversation。"
+        "短回复、询问、闲聊或采访都使用 talk_to；"
+        "是否多轮、何时结束和 cooldown 由世界引擎托管。"
         f"对话终止判断：{close_hint}"
     )
 
@@ -168,17 +173,17 @@ def render_repeat_guard_hint(
     speak_texts: list[str] = []
     for item in recent:
         facts = item.get("facts")
-        if item.get("action_type") == "speak_to" and isinstance(facts, dict):
+        if item.get("action_type") == "talk_to" and isinstance(facts, dict):
             speak_texts.append(str(facts.get("text", "")).strip())
     normalized = [_normalize(text) for text in speak_texts if text]
     if len(normalized) != len(set(normalized)):
-        return "短期内已经出现重复 speak_to 文本；不要再说同一句，改换话题、结束日程或 wait。"
+        return "短期内已经出现重复 talk_to 文本；不要再说同一句，改换话题、结束日程或 wait。"
     if len(recent) >= 3:
         action_types = [str(item.get("action_type")) for item in recent[-3:]]
         if len(set(action_types)) == 1:
             return (
                 f"短期内连续执行 {action_types[-1]}；继续前检查语义是否重复，"
-                "若目标已满足应 finish_schedule_segment。"
+                "若目标已满足应转向下一个具体行动或等待引擎推进。"
             )
     return "短期内不要重复同一句或同语义对话；重复时改换话题、结束会话或转为 wait。"
 
@@ -250,21 +255,21 @@ def successful_schedule_actions(
 def default_subtasks_for(schedule: ScheduleSegment) -> list[str]:
     intent = schedule.intent
     if schedule.npc_id == "alice" and "吃早餐" in intent:
-        return ["与早餐桌交互", "确认已经吃完", "调用 finish_schedule_segment"]
+        return ["与早餐桌交互", "完成进食"]
     if schedule.npc_id == "alice" and "咖啡" in intent:
-        return ["到达 cafe", "点单或取咖啡", "调用 finish_schedule_segment"]
+        return ["到达 cafe", "点单或取咖啡"]
     if schedule.npc_id == "bob" and "准备" in intent:
-        return ["检查柜台", "整理点心柜", "准备咖啡或菜单", "调用 finish_schedule_segment"]
+        return ["检查柜台", "整理点心柜", "准备咖啡或菜单"]
     if schedule.npc_id == "clara" and "整理" in intent:
-        return ["处理归还书车", "把书放回书架", "调用 finish_schedule_segment"]
+        return ["处理归还书车", "把书放回书架"]
     if "吃" in intent:
-        return ["选择可见食物/餐桌", "完成进食", "调用 finish_schedule_segment"]
+        return ["选择可见食物/餐桌", "完成进食"]
     if "买" in intent or "取" in intent:
-        return ["到达目标地点", "选择交易/取物对象", "完成后调用 finish_schedule_segment"]
+        return ["到达目标地点", "选择交易/取物对象"]
     if "准备" in intent:
-        return ["选择两个不同相关对象", "完成至少三次准备动作", "调用 finish_schedule_segment"]
+        return ["选择两个不同相关对象", "完成准备动作"]
     if "整理" in intent:
-        return ["选择归还/收纳相关对象", "完成整理动作", "调用 finish_schedule_segment"]
+        return ["选择归还/收纳相关对象", "完成整理动作"]
     return []
 
 
@@ -281,20 +286,20 @@ def _completion_guidance(
     ):
         return (
             "准备类目标已有足够证据；如果柜台、点心柜、咖啡/菜单等已处理，"
-            "应优先调用 finish_schedule_segment，而不是继续重复同类交互。"
+            "不要继续重复同类交互。"
         )
     if "整理" in intent and (
         any(word in text for word in ("归还书车", "书架", "整理归还", "馆藏"))
         or len(evidence.distinct_object_ids) >= 2
     ):
-        return "整理类目标已有归还/书架处理证据；可调用 finish_schedule_segment。"
+        return "整理类目标已有归还/书架处理证据；不要继续重复同类交互。"
     if any(word in intent for word in ("吃", "买", "取", "送")) and evidence.action_count >= 1:
-        return "消费/取物类目标已有直接相关行动；若物品已取得或需求已满足，应调用 finish_schedule_segment。"
+        return "消费/取物类目标已有直接相关行动；若物品已取得或需求已满足，不要重复同类交互。"
     if remaining <= stride_minutes:
-        return "当前日程即将结束；如果目标已经基本满足，应立即调用 finish_schedule_segment。"
+        return "当前日程即将结束；选择最直接的行动或短暂等待引擎推进。"
     if evidence.action_count == 0:
         return "先选择与当前日程最相关的可见对象或出口行动；不要只输出叙述或只观察。"
-    return "继续行动前先判断目标是否已经满足；满足则调用 finish_schedule_segment。"
+    return "继续行动前检查语义是否重复；优先选择尚未完成的具体行动。"
 
 
 def _relevant_visible_objects(intent: str, objects: Sequence[TownObject]) -> list[TownObject]:

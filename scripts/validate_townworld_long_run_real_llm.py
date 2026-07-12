@@ -28,7 +28,7 @@ from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
 from annie.npc import NPCAgent
-from annie.npc.config import load_model_config
+from annie.npc.model.config import load_model_config
 from annie.town import (
     ReflectionEvidence,
     ScheduleSegment,

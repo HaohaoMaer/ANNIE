@@ -6,7 +6,7 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
-from annie.npc.context_budget import ContextBudget, estimate_tokens
+from annie.npc.cognition.context_budget import ContextBudget, estimate_tokens
 
 
 class _StubLLM:

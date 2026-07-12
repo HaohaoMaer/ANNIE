@@ -1,0 +1,383 @@
+schema_version: 1
+id: small_town
+name: 小镇日常
+clock:
+  day: 1
+  minute: 480
+  stride_minutes: 10
+locations:
+  - id: home_alice
+    name: Alice 的家
+    description: 小镇边缘的一间小屋。
+    exits:
+      - to: town_square
+        travel_minutes: 5
+    affordances:
+      - id: rest
+        label: 休息
+        description: 在家中短暂休息，恢复一天开始时的状态。
+        aliases: [休息, 整理家务]
+      - id: sleep
+        label: 睡觉
+        description: 回家睡觉并结束一天。
+        aliases: [睡觉, 入睡]
+    objects:
+      - id: breakfast_table
+        name: 早餐桌
+        description: 桌上放着简单早餐，可用于完成吃早餐日程。
+        affordances:
+          - id: eat_breakfast
+            label: 吃早餐
+            description: 吃完桌上的简单早餐。
+            aliases: [吃早餐, 用餐]
+          - id: clear_table
+            label: 收拾餐桌
+            description: 收拾餐具并整理桌面。
+            aliases: [收拾, 整理餐桌]
+  - id: town_square
+    name: 小镇广场
+    description: 小镇中央的广场，通向各个公共地点。
+    exits:
+      - {to: home_alice, travel_minutes: 5}
+      - {to: cafe, travel_minutes: 3}
+      - {to: library, travel_minutes: 4}
+      - {to: clinic, travel_minutes: 4}
+      - {to: market, travel_minutes: 4}
+      - {to: workshop, travel_minutes: 6}
+      - {to: park, travel_minutes: 5}
+      - {to: home_bob, travel_minutes: 5}
+      - {to: home_clara, travel_minutes: 5}
+    affordances:
+      - id: meet
+        label: 碰面
+        description: 在广场等待或和同地点镇民碰面。
+        aliases: [碰面, 会合]
+    objects:
+      - id: notice_board
+        name: 公告栏
+        description: 一块贴满本地公告的木板。
+        affordances:
+          - id: read_notices
+            label: 阅读公告
+            description: 查看公告栏上近期的镇内消息。
+            aliases: [读公告, 查看公告]
+            event_type: notice
+          - id: post_notice
+            label: 张贴公告
+            description: 张贴一条给镇民看的简短公告。
+            aliases: [贴公告, 发布通知]
+            event_type: notice
+  - id: home_bob
+    name: Bob 的家
+    description: 离广场不远的小公寓，Bob 常在清晨出门去咖啡馆。
+    exits:
+      - {to: town_square, travel_minutes: 5}
+    affordances:
+      - id: rest
+        label: 休息
+        description: 在家中休息。
+        aliases: [休息, 小睡]
+      - id: sleep
+        label: 睡觉
+        description: 回家睡觉并结束一天。
+        aliases: [睡觉, 入睡]
+  - id: home_clara
+    name: Clara 的家
+    description: 靠近图书馆方向的安静住所。
+    exits:
+      - {to: town_square, travel_minutes: 5}
+    affordances:
+      - id: rest
+        label: 休息
+        description: 在家中休息。
+        aliases: [休息, 小睡]
+      - id: sleep
+        label: 睡觉
+        description: 回家睡觉并结束一天。
+        aliases: [睡觉, 入睡]
+  - id: cafe
+    name: 咖啡馆
+    description: 一间安静的咖啡馆，镇民常在这里交换晨间消息。
+    exits:
+      - to: town_square
+        travel_minutes: 3
+    affordances:
+      - id: sit
+        label: 入座
+        description: 在咖啡馆找座位进行短暂停留。
+        aliases: [坐下, 休息]
+    objects:
+      - id: cafe_counter
+        name: 咖啡馆柜台
+        description: 摆着杯子和收银机的木质柜台，可用于点单、结账和准备营业。
+        affordances:
+          - id: order_coffee
+            label: 点咖啡
+            description: 点一杯咖啡或完成咖啡购买。
+            aliases: [点咖啡, 买咖啡, 取咖啡, 点咖啡并取咖啡, 结账]
+          - id: prepare_counter
+            label: 整理柜台
+            description: 整理杯子、菜单和收银台。
+            aliases: [准备营业, 整理柜台, 检查柜台, 煮咖啡]
+      - id: pastry_case
+        name: 点心陈列柜
+        description: 玻璃柜里陈列着可颂和松饼，可用于购买早餐或搭配咖啡。
+        affordances:
+          - id: buy_pastry
+            label: 购买点心
+            description: 购买可颂或松饼。
+            aliases: [买点心, 买早餐]
+          - id: stock_pastries
+            label: 整理点心
+            description: 补齐或整理陈列柜里的点心。
+            aliases: [整理点心, 整理点心柜, 补货]
+  - id: library
+    name: 图书馆
+    description: 一座公共图书馆，里面有长阅读桌。
+    exits:
+      - to: town_square
+        travel_minutes: 4
+    affordances:
+      - id: study
+        label: 阅读学习
+        description: 在公共阅读桌查阅资料或安静学习。
+        aliases: [阅读, 学习]
+    objects:
+      - id: bookshelf
+        name: 书架
+        description: 放着地方史书和借阅小说的书架，可用于整理馆藏。
+        affordances:
+          - id: browse_books
+            label: 查阅书籍
+            description: 查阅书架上的地方史或小说。
+            aliases: [查书, 阅读]
+          - id: shelve_books
+            label: 上架书籍
+            description: 把书放回正确的书架位置。
+            aliases: [上架, 整理馆藏, 放回书架]
+      - id: returns_cart
+        name: 归还书车
+        description: 推车上放着刚归还的书，可用于完成整理归还书籍日程。
+        affordances:
+          - id: sort_returns
+            label: 整理归还书
+            description: 按类别整理刚归还的书。
+            aliases: [整理归还, 整理归还书籍, 分拣书]
+  - id: clinic
+    name: 诊所
+    description: 一间整洁的诊所，备有基础医疗用品。
+    exits:
+      - to: town_square
+        travel_minutes: 4
+    affordances:
+      - id: consult
+        label: 问诊
+        description: 向诊所请求基础健康建议或简单服务。
+        aliases: [问诊, 咨询]
+    objects:
+      - id: medicine_cabinet
+        name: 药品柜
+        description: 存放常用医疗用品的上锁柜子。
+        affordances:
+          - id: request_medicine
+            label: 领取药品
+            description: 领取基础医疗用品。
+            aliases: [拿药, 领药]
+          - id: check_supplies
+            label: 检查药品
+            description: 检查药品柜库存。
+            aliases: [检查库存, 整理药品]
+  - id: market
+    name: 集市
+    description: 小镇早市，有摊位、公共秤和采购清单。
+    exits:
+      - to: town_square
+        travel_minutes: 4
+    affordances:
+      - id: shop
+        label: 采购
+        description: 购买或询问日常用品。
+        aliases: [采购, 买菜, 买东西]
+    objects:
+      - id: produce_stall
+        name: 蔬果摊
+        description: 摆着新鲜蔬菜和水果的摊位。
+        affordances:
+          - id: buy_produce
+            label: 购买蔬果
+            description: 购买当天需要的蔬菜或水果。
+            aliases: [买菜, 采购]
+          - id: ask_price
+            label: 询价
+            description: 向摊主询问价格和货源。
+            aliases: [询价, 问价格]
+      - id: community_scale
+        name: 公共秤
+        description: 供摊主和居民称量物品的公共台秤。
+        affordances:
+          - id: weigh_goods
+            label: 称量物品
+            description: 称量采购物或寄放物。
+            aliases: [称重, 称量]
+      - id: errand_box
+        name: 代办箱
+        description: 居民可以留下采购或取送请求的木箱。
+        affordances:
+          - id: leave_request
+            label: 留下代办请求
+            description: 写下采购、取送或帮忙请求。
+            aliases: [留下请求, 委托]
+          - id: read_requests
+            label: 阅读代办请求
+            description: 查看当前无人处理的代办请求。
+            aliases: [查看请求, 读请求]
+  - id: workshop
+    name: 修理工坊
+    description: 一间堆着工具和木料的修理工坊。
+    exits:
+      - to: town_square
+        travel_minutes: 6
+    affordances:
+      - id: repair_service
+        label: 请求修理
+        description: 请求简单修理或借用工具。
+        aliases: [修理, 借工具]
+    objects:
+      - id: tool_rack
+        name: 工具架
+        description: 挂着锤子、钳子和卷尺的工具架。
+        affordances:
+          - id: borrow_tool
+            label: 借用工具
+            description: 借用一件小工具。
+            aliases: [借工具, 拿工具]
+          - id: return_tool
+            label: 归还工具
+            description: 把借出的工具归还到工具架。
+            aliases: [还工具, 归还]
+      - id: repair_bench
+        name: 修理台
+        description: 可以处理简单维修的长工作台。
+        affordances:
+          - id: repair_item
+            label: 修理物品
+            description: 处理一件简单损坏物品。
+            aliases: [修理, 维修]
+          - id: request_repair
+            label: 请求维修服务
+            description: 请求工坊安排维修。
+            aliases: [请求维修, 报修]
+      - id: parts_bin
+        name: 零件箱
+        description: 分类放着螺丝、铰链和小零件。
+        affordances:
+          - id: find_part
+            label: 寻找零件
+            description: 查找维修所需的小零件。
+            aliases: [找零件, 取零件]
+  - id: park
+    name: 河边公园
+    description: 沿河的小公园，长椅旁能看到慢跑路线。
+    exits:
+      - to: town_square
+        travel_minutes: 5
+    affordances:
+      - id: walk
+        label: 散步
+        description: 沿河散步、整理思绪或等待别人。
+        aliases: [散步, 等人]
+    objects:
+      - id: park_bench
+        name: 公园长椅
+        description: 面向河边的小长椅，适合休息或谈话。
+        affordances:
+          - id: sit_rest
+            label: 坐下休息
+            description: 短暂坐下休息或等待别人。
+            aliases: [休息, 等人]
+      - id: garden_plot
+        name: 社区花圃
+        description: 居民共同照料的小花圃。
+        affordances:
+          - id: water_plants
+            label: 浇花
+            description: 给社区花圃浇水。
+            aliases: [浇水, 照料花圃]
+          - id: inspect_garden
+            label: 查看花圃
+            description: 检查花圃的状态。
+            aliases: [查看花圃, 检查植物]
+residents:
+  - id: alice
+    name: Alice
+    starting_location: home_alice
+    home_location: home_alice
+    sleep_location: home_alice
+    default_wake_window: [420, 540]
+    default_sleep_window: [1320, 1440]
+    lifecycle_status: awake
+    persona:
+      currently: 正在家里开始一天，准备先吃早餐。
+      lifestyle: 规律、喜欢先整理家务再出门。
+      background: 小镇居民，常去咖啡馆和图书馆。
+      traits: [细心, 友善, 守时]
+    relationships:
+      bob: 常在咖啡馆见面，Bob 知道 Alice 喜欢早上的咖啡。
+      clara: 会在图书馆偶遇并交流镇内消息。
+    schedule:
+      - start_minute: 480
+        duration_minutes: 60
+        location: home_alice
+        intent: 吃早餐
+      - start_minute: 540
+        duration_minutes: 60
+        location: cafe
+        intent: 买咖啡
+    memory_seeds:
+      - id: alice_routine
+        category: semantic
+        content: Alice 通常先吃早餐，再去咖啡馆买咖啡。
+        metadata:
+          topic: routine
+  - id: bob
+    name: Bob
+    starting_location: cafe
+    home_location: home_bob
+    sleep_location: home_bob
+    default_wake_window: [360, 480]
+    default_sleep_window: [1320, 1440]
+    lifecycle_status: awake
+    persona:
+      currently: 正在咖啡馆准备晨间营业。
+      lifestyle: 早起经营咖啡馆，熟悉镇民的早餐习惯。
+      background: 咖啡馆店员，常在广场听到消息。
+      traits: [健谈, 务实, 可靠]
+    relationships:
+      alice: 知道 Alice 早上会来买咖啡。
+      clara: 偶尔给 Clara 留一份点心。
+    schedule:
+      - start_minute: 480
+        duration_minutes: 120
+        location: cafe
+        intent: 准备咖啡馆营业
+  - id: clara
+    name: Clara
+    starting_location: library
+    home_location: home_clara
+    sleep_location: home_clara
+    default_wake_window: [420, 540]
+    default_sleep_window: [1320, 1440]
+    lifecycle_status: awake
+    persona:
+      currently: 正在图书馆整理归还的书籍。
+      lifestyle: 安静、重视秩序，上午通常在图书馆工作。
+      background: 图书馆管理员，了解镇民借阅和公告信息。
+      traits: [谨慎, 博学, 有条理]
+    relationships:
+      alice: 和 Alice 会交换阅读建议。
+      bob: 偶尔从 Bob 的咖啡馆带早餐到图书馆。
+    schedule:
+      - start_minute: 480
+        duration_minutes: 120
+        location: library
+        intent: 整理归还的书籍

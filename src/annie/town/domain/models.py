@@ -93,7 +93,11 @@ class ScheduleSegment:
     location_id: str
     intent: str
     subtasks: list[str] = field(default_factory=list)
+    completion_tags: list[str] = field(default_factory=list)
     day: int | None = None
+    completion_policy: str = "first_matching_action"
+    min_matching_actions: int = 1
+    allow_explicit_override: bool = True
 
     @property
     def end_minute(self) -> int:
@@ -120,6 +124,14 @@ class CurrentAction:
     duration_minutes: int
     status: str
     summary: str = ""
+    lifecycle_state: str = "in_progress"
+    effect_model: str = "immediate_effect"
+    occupancy_model: str = "duration_occupied"
+    effect_applied: bool = True
+    failure_reason: str | None = None
+    interrupted_reason: str | None = None
+    finalized_minute: int | None = None
+    metadata: dict[str, object] = field(default_factory=dict)
 
     @property
     def end_minute(self) -> int:
@@ -132,6 +144,15 @@ class ResidentScratch:
 
 
 @dataclass
+class ResidentPersona:
+    currently: str = ""
+    lifestyle: str = ""
+    background: str = ""
+    traits: list[str] = field(default_factory=list)
+    relationships: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
 class ResidentDayPlan:
     day: int
     currently: str = ""
@@ -141,8 +162,10 @@ class ResidentDayPlan:
     validation: dict[str, object] = field(default_factory=dict)
     schedule_summary: str = ""
     day_summary: str = ""
+    schedule_evidence: list[dict[str, object]] = field(default_factory=list)
     started_minute: int | None = None
     ended_minute: int | None = None
+    lifecycle_anomalies: list[dict[str, object]] = field(default_factory=list)
 
 
 @dataclass
@@ -175,9 +198,15 @@ class TownPerceptionPolicy:
 class TownResidentState:
     npc_id: str
     location_id: str
+    home_location_id: str | None = None
+    sleep_location_id: str | None = None
+    default_wake_window: tuple[int, int] | None = None
+    default_sleep_window: tuple[int, int] | None = None
+    lifecycle_status: str = "awake"
     schedule: list[ScheduleSegment] = field(default_factory=list)
     current_action: CurrentAction | None = None
     scratch: ResidentScratch = field(default_factory=ResidentScratch)
+    persona: ResidentPersona = field(default_factory=ResidentPersona)
     schedule_day: int | None = None
     day_plans: dict[int, ResidentDayPlan] = field(default_factory=dict)
     spatial_memory: ResidentSpatialMemory = field(default_factory=ResidentSpatialMemory)
@@ -192,6 +221,27 @@ class ScheduleCompletion:
     location_id: str
     note: str = ""
     day: int | None = None
+    completion_type: str = "explicit"
+    matched_action_id: str | None = None
+    matched_action_type: str | None = None
+    matching_reason: str = ""
+    completion_policy: str = "first_matching_action"
+    action_end_minute: int | None = None
+    completion_reason: str = ""
+
+
+@dataclass
+class ScheduleSatisfaction:
+    npc_id: str
+    start_minute: int
+    location_id: str
+    day: int | None = None
+    completion_policy: str = "first_matching_action"
+    matched_action_id: str | None = None
+    matched_action_type: str | None = None
+    matching_reason: str = ""
+    action_end_minute: int | None = None
+    match_count: int = 1
 
 
 @dataclass

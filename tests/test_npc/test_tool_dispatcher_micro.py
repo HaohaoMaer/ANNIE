@@ -41,7 +41,7 @@ def test_exact_max_chars_not_truncated():
 
 
 def test_dispatch_unknown_tool_returns_error_string():
-    from annie.npc.context import AgentContext
+    from annie.npc.core.context import AgentContext
 
     class _NullMemory:
         def recall(self, *a, **k):

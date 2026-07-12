@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from annie.npc.tracing import EventType, TraceEvent, Tracer
+from annie.npc.observability.tracing import EventType, TraceEvent, Tracer
 
 
 class TestTraceEvent:

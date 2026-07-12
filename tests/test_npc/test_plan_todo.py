@@ -5,7 +5,7 @@ completing one todo doesn't affect others; missing-arg error paths.
 """
 from __future__ import annotations
 
-from annie.npc.context import AgentContext
+from annie.npc.core.context import AgentContext
 from annie.npc.memory.interface import MemoryRecord
 from annie.npc.tools.base_tool import ToolContext
 from annie.world_engine.tools import PlanTodoTool

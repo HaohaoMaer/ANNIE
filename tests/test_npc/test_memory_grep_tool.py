@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from annie.npc.context import AgentContext
+from annie.npc.core.context import AgentContext
 from annie.npc.memory.interface import MemoryRecord
 from annie.npc.tools.base_tool import ToolContext
 from annie.npc.tools.builtin import MemoryGrepTool, default_builtin_tools

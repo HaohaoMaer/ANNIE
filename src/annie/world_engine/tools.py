@@ -10,7 +10,7 @@ from typing import Any, Literal, TypeVar, cast
 from pydantic import BaseModel, Field
 
 from annie.npc.memory.interface import MEMORY_CATEGORY_TODO
-from annie.npc.response import ActionRequest, ActionResult
+from annie.npc.core.response import ActionRequest, ActionResult
 from annie.npc.tools.base_tool import ToolContext, ToolDef
 
 _T = TypeVar("_T", bound=BaseModel)

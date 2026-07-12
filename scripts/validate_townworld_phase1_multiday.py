@@ -17,16 +17,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import chromadb
-
-from annie.npc.context import AgentContext
-from annie.npc.response import AgentResponse
+from annie.npc.core.context import AgentContext
+from annie.npc.core.response import AgentResponse
 from annie.npc.tools.base_tool import ToolContext
 from annie.town import (
     ScheduleSegment,
     TownWorldEngine,
-    create_small_town_state,
-    run_multi_npc_days,
+    default_small_town_scenario_path,
+    validate_deterministic_long_run,
 )
 
 
@@ -64,7 +62,7 @@ class DeterministicTownAgent:
                 {"object_id": "breakfast_table", "intent": "吃早餐"},
                 tool_context,
             )
-            _tool(context, "finish_schedule_segment").safe_call(
+            _tool(context, "complete_current_schedule").safe_call(
                 {"note": "早餐已完成"},
                 tool_context,
             )
@@ -75,7 +73,7 @@ class DeterministicTownAgent:
                 {"object_id": "cafe_counter", "intent": "买咖啡"},
                 tool_context,
             )
-            _tool(context, "finish_schedule_segment").safe_call(
+            _tool(context, "complete_current_schedule").safe_call(
                 {"note": "咖啡已买好"},
                 tool_context,
             )
@@ -93,7 +91,7 @@ def main() -> int:
         description="Validate deterministic Phase 1 TownWorld multi-day behavior."
     )
     parser.add_argument("--days", type=int, default=2)
-    parser.add_argument("--npc-id", default="alice")
+    parser.add_argument("--npc-id", action="append", dest="npc_ids", default=None)
     parser.add_argument("--start-minute", type=int, default=8 * 60)
     parser.add_argument("--end-minute", type=int, default=10 * 60)
     parser.add_argument("--max-ticks-per-day", type=int, default=16)
@@ -103,26 +101,32 @@ def main() -> int:
     report = CheckReport()
     with tempfile.TemporaryDirectory(prefix="annie_town_phase1_") as tmp:
         tmp_path = Path(tmp)
-        replay_dir = args.replay_dir or tmp_path / "replay"
-        engine = TownWorldEngine(
-            create_small_town_state(),
-            chroma_client=chromadb.PersistentClient(path=str(tmp_path / "vs")),
-            history_dir=tmp_path / "history",
-        )
-
-        result = run_multi_npc_days(
-            engine,
-            DeterministicTownAgent(),
-            [args.npc_id],
+        run_root = tmp_path if args.replay_dir is None else args.replay_dir.parent
+        validation = validate_deterministic_long_run(
+            run_root=run_root,
+            scenario_path=default_small_town_scenario_path(),
+            run_id="phase1_multiday",
+            npc_ids=args.npc_ids,
             days=args.days,
             start_minute=args.start_minute,
             end_minute=args.end_minute,
             max_ticks_per_day=args.max_ticks_per_day,
-            replay_dir=replay_dir,
         )
+        runtime_result = validation.result
+        engine = runtime_result.engine
+        replay_dir = args.replay_dir or runtime_result.run_dir / "replay"
+        primary_npc_id = (args.npc_ids or engine.state.resident_ids())[0]
 
-        report.add("multi-day runner completed", result.ok, result.note)
-        resident = engine.state.residents[args.npc_id]
+        report.add(
+            "multi-day runner completed",
+            validation.ok,
+            str(runtime_result.diagnostics["validation"].get("note", "")),
+        )
+        runtime_checks = runtime_result.diagnostics["validation"]["checks"]
+        report.add("multi-resident runtime covered", bool(runtime_checks["multiple_residents"]))
+        report.add("fixed tick advancement validated", bool(runtime_checks["fixed_tick_advancement"]))
+        report.add("action lifecycle warnings absent", not validation.lifecycle_warnings)
+        resident = engine.state.residents[primary_npc_id]
         report.add("schedule renewed for final day", resident.schedule_day == args.days)
         report.add(
             "day planning state persisted",
@@ -132,7 +136,7 @@ def main() -> int:
         report.add(
             "day summaries stored as memory",
             bool(
-                engine.memory_for(args.npc_id).grep(
+                engine.memory_for(primary_npc_id).grep(
                     "",
                     category="impression",
                     metadata_filters={"source": "town_day_summary", "day": args.days},
@@ -147,10 +151,10 @@ def main() -> int:
         engine.state.clock.day = args.days + 1
         engine.state.clock.minute = args.start_minute
         engine.plan_day_for_resident(
-            args.npc_id,
+            primary_npc_id,
             [
                 ScheduleSegment(
-                    npc_id=args.npc_id,
+                    npc_id=primary_npc_id,
                     start_minute=args.start_minute,
                     duration_minutes=60,
                     location_id="cafe",
@@ -159,7 +163,7 @@ def main() -> int:
             ],
         )
         engine.revise_current_schedule_segment(
-            args.npc_id,
+            primary_npc_id,
             reason="phase1_script_waiting",
             subtasks=["确认柜台状态", "完成后调用 finish_schedule_segment"],
         )
@@ -168,13 +172,21 @@ def main() -> int:
             any(item["stage"] == "schedule_revision" for item in engine.planning_log),
         )
 
-        trigger_loop_guards(engine, args.npc_id)
+        trigger_loop_guards(engine, primary_npc_id)
         guard_types = {str(item["guard_type"]) for item in engine.loop_guard_events}
         report.add("failed-action loop guard recorded", "repeated_failed_action" in guard_types)
         report.add("low-value loop guard recorded", "repeated_low_value_action" in guard_types)
         report.add("schedule-drift guard recorded", "schedule_drift" in guard_types)
 
+        if engine.replay_log:
+            engine.replay_log[-1]["snapshot"] = engine.build_replay_snapshot([primary_npc_id])
         paths = engine.write_replay_artifacts(replay_dir)
+        persistence_paths = engine.save_run(
+            runtime_result.run_dir,
+            replay_paths=paths,
+            model_summary={"provider": "deterministic"},
+            validation={"ok": report.ok, "script": Path(__file__).name},
+        )
         checkpoint_rows = _read_jsonl(paths["checkpoints"])
         final_snapshot = checkpoint_rows[-1]["snapshot"] if checkpoint_rows else {}
         report.add(
@@ -189,6 +201,8 @@ def main() -> int:
 
         report.print()
         print(f"Replay dir: {replay_dir}")
+        print(f"Manifest: {persistence_paths['manifest']}")
+        print(f"Latest snapshot: {persistence_paths['latest_snapshot']}")
         if report.ok:
             print("RESULT PASS phase1 deterministic multi-day validation")
             return 0

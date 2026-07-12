@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from annie.npc.response import ActionRequest
+from annie.npc.core.response import ActionRequest
 from annie.town import TownWorldEngine, create_small_town_state
 from annie.town.domain import ScheduleSegment
 

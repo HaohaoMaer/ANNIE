@@ -9,13 +9,15 @@ from langchain_core.messages import AIMessage, BaseMessage
 from pydantic import BaseModel
 
 from annie.npc.agent import _after_executor
-from annie.npc.executor import Executor
-from annie.npc.context import AgentContext
+from annie.npc.cognition.executor import Executor
+from annie.npc.core.context import AgentContext
 from annie.npc.runtime.tool_dispatcher import ToolDispatcher
-from annie.npc.state import AgentState, Task, TaskStatus
+from annie.npc.runtime.skill_runtime import SkillRuntime
+from annie.npc.skills.base_skill import SkillDef, SkillRegistry
+from annie.npc.core.state import AgentState, Task, TaskStatus
 from annie.npc.tools.base_tool import ToolContext, ToolDef
 from annie.npc.tools.tool_registry import ToolRegistry
-from annie.npc.tracing import EventType, Tracer
+from annie.npc.observability.tracing import EventType, Tracer
 
 
 class _StubLLM:
@@ -244,41 +246,11 @@ class TestExecutor:
         assert "Observe the stranger" in second_task_messages
         assert "First task complete." in second_task_messages
 
-    def test_request_action_stops_remaining_tasks(self, npc_profile):
-        llm = _StubLLM([
-            AIMessage(
-                content="",
-                tool_calls=[{
-                    "name": "request_action",
-                    "args": {"type": "move", "payload": {"to": "kitchen"}},
-                    "id": "call_move",
-                }],
-            ),
-            "This second task should not run.",
-        ])
-        executor = Executor(llm, ToolDispatcher(ToolRegistry()))
-        tasks = [
-            Task(description="Move to the kitchen"),
-            Task(description="Talk after moving"),
-        ]
+    def test_default_tool_registry_does_not_expose_declarative_action_tools(self):
+        registry = ToolRegistry()
 
-        result = executor({
-            "agent_context": _ctx(npc_profile),
-            "input_event": "Event",
-            "tasks": tasks,
-            "runtime": {
-                "actions": [],
-                "action_results": [],
-                "memory_updates": [],
-                "pending_action_ids": [],
-            },
-        })
-
-        assert len(llm.calls) == 1
-        assert len(result["tasks"]) == 1
-        assert result["tasks"][0].status == TaskStatus.DONE
-        assert len(result["execution_results"]) == 1
-        assert result["runtime"]["pending_action_ids"]
+        assert "declare_action" not in registry.list_tools()
+        assert "request_action" not in registry.list_tools()
 
     def test_use_skill_with_empty_final_answer_does_not_complete_task(self, npc_profile):
         llm = _StubLLM([
@@ -381,6 +353,44 @@ class TestExecutor:
         assert result["tasks"][0].status == TaskStatus.DONE
         assert result["execution_results"][0]["action"] == "已提交动作：commit_action"
         assert "MAX_TOOL_LOOPS" not in result["tasks"][0].result
+
+    def test_skill_frames_do_not_leak_between_tasks(self, npc_profile):
+        llm = _StubLLM([
+            AIMessage(
+                content="",
+                tool_calls=[{
+                    "name": "use_skill",
+                    "args": {"skill_name": "focus", "args": {}},
+                    "id": "call_skill",
+                }],
+            ),
+            AIMessage(content="First task complete."),
+            AIMessage(content="Second task complete."),
+        ])
+        registry = ToolRegistry()
+        skills = SkillRegistry([
+            SkillDef(name="focus", one_line="Focus attention.", prompt="Stay focused."),
+        ])
+        runtime = {"skill_runtime": SkillRuntime(skills)}
+        executor = Executor(llm, ToolDispatcher(registry, runtime=runtime))
+        tasks = [
+            Task(description="Use focus"),
+            Task(description="Continue after focus"),
+        ]
+
+        result = executor({
+            "agent_context": _ctx(npc_profile),
+            "input_event": "Event",
+            "tasks": tasks,
+            "runtime": runtime,
+        })
+
+        assert [r["action"] for r in result["execution_results"]] == [
+            "First task complete.",
+            "Second task complete.",
+        ]
+        assert runtime["skill_frames"] == []
+        assert registry._frames == []
 
 
 class _ReadNoteTool(ToolDef):

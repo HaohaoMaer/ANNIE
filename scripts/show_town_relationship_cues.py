@@ -8,8 +8,8 @@ from pathlib import Path
 
 import chromadb
 
-from annie.npc.context import AgentContext
-from annie.npc.response import AgentResponse
+from annie.npc.core.context import AgentContext
+from annie.npc.core.response import AgentResponse
 from annie.town import TownWorldEngine
 from annie.town.content import create_small_town_state
 

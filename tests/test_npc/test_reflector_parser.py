@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from annie.npc.reflector import _parse_list, _parse_rel_notes
-from annie.npc.reflector import Reflector
+from annie.npc.cognition.reflector import _parse_list, _parse_rel_notes
+from annie.npc.cognition.reflector import Reflector
 
 
 def test_reflector_parse_json_contract():

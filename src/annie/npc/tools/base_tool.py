@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
-    from annie.npc.context import AgentContext
+    from annie.npc.core.context import AgentContext
 
 logger = logging.getLogger(__name__)
 

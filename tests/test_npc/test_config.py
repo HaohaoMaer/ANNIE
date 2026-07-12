@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from annie.npc.config import ModelConfig, load_model_config
+from annie.npc.model.config import ModelConfig, load_model_config
 
 
 class TestLoadModelConfig:

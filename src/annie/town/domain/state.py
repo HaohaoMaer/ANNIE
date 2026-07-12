@@ -10,6 +10,7 @@ from annie.town.domain.models import (
     Location,
     MoveResult,
     ScheduleCompletion,
+    ScheduleSatisfaction,
     ScheduleSegment,
     TownClock,
     TownEvent,
@@ -31,6 +32,7 @@ class TownState:
     conversation_sessions: dict[str, ConversationSession] = field(default_factory=dict)
     conversation_cooldowns: dict[str, int] = field(default_factory=dict)
     completed_schedule_segments: dict[str, list[ScheduleCompletion]] = field(default_factory=dict)
+    satisfied_schedule_segments: dict[str, list[ScheduleSatisfaction]] = field(default_factory=dict)
     npc_locations: dict[str, str] = field(default_factory=dict)
     residents: dict[str, TownResidentState] = field(default_factory=dict)
 
@@ -54,6 +56,8 @@ class TownState:
                 resident = TownResidentState(
                     npc_id=npc_id,
                     location_id=location_id,
+                    home_location_id=location_id or None,
+                    sleep_location_id=location_id or None,
                     schedule=schedule,
                     schedule_day=self.clock.day if schedule else None,
                     current_action=self.current_actions.get(npc_id),
@@ -71,6 +75,10 @@ class TownState:
                     segment.day = resident.schedule_day
             if resident.current_action is None and npc_id in self.current_actions:
                 resident.current_action = self.current_actions[npc_id]
+            if resident.home_location_id is None and resident.location_id:
+                resident.home_location_id = resident.location_id
+            if resident.sleep_location_id is None:
+                resident.sleep_location_id = resident.home_location_id
 
     def _sync_legacy_mirrors(self) -> None:
         self.npc_locations = {
@@ -117,7 +125,12 @@ class TownState:
         previous_location_id = self.location_id_for(npc_id)
         resident = self.residents.get(npc_id)
         if resident is None:
-            resident = TownResidentState(npc_id=npc_id, location_id=location_id)
+            resident = TownResidentState(
+                npc_id=npc_id,
+                location_id=location_id,
+                home_location_id=location_id,
+                sleep_location_id=location_id,
+            )
             self.residents[npc_id] = resident
         else:
             resident.location_id = location_id
@@ -146,7 +159,12 @@ class TownState:
     def set_current_action(self, npc_id: str, action: CurrentAction) -> None:
         resident = self.residents.get(npc_id)
         if resident is None:
-            resident = TownResidentState(npc_id=npc_id, location_id=action.location_id)
+            resident = TownResidentState(
+                npc_id=npc_id,
+                location_id=action.location_id,
+                home_location_id=action.location_id,
+                sleep_location_id=action.location_id,
+            )
             self.residents[npc_id] = resident
         resident.current_action = action
         self._sync_legacy_for_resident(npc_id)
@@ -169,6 +187,8 @@ class TownState:
             resident = TownResidentState(
                 npc_id=npc_id,
                 location_id=self.npc_locations.get(npc_id, ""),
+                home_location_id=self.npc_locations.get(npc_id) or None,
+                sleep_location_id=self.npc_locations.get(npc_id) or None,
             )
             self.residents[npc_id] = resident
         schedule_day = self.clock.day if day is None else day
@@ -307,6 +327,7 @@ class TownState:
             location_id=target.location_id,
             note=note,
             day=self.clock.day,
+            completion_type="explicit_request",
         )
         existing = self.completed_schedule_segments.setdefault(npc_id, [])
         for item in existing:
@@ -325,6 +346,21 @@ class TownState:
             == (self.clock.day if segment.day is None else segment.day)
             for item in self.completed_schedule_segments.get(npc_id, [])
         )
+
+    def schedule_segment_satisfaction(
+        self,
+        npc_id: str,
+        segment: ScheduleSegment,
+    ) -> ScheduleSatisfaction | None:
+        segment_day = self.clock.day if segment.day is None else segment.day
+        for item in self.satisfied_schedule_segments.get(npc_id, []):
+            item_day = self.clock.day if item.day is None else item.day
+            if item.start_minute == segment.start_minute and item_day == segment_day:
+                return item
+        return None
+
+    def is_schedule_segment_satisfied(self, npc_id: str, segment: ScheduleSegment) -> bool:
+        return self.schedule_segment_satisfaction(npc_id, segment) is not None
 
     def active_conversation_for(self, npc_id: str) -> ConversationSession | None:
         for session in self.conversation_sessions.values():

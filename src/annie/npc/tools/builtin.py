@@ -4,8 +4,6 @@ Universal tools every world engine gets for free:
 
 * ``memory_recall`` — MemoryInterface.recall wrapper (category list filter)
 * ``memory_store`` — declare a MemoryUpdate; it does not persist directly
-* ``declare_action`` — declare an ActionRequest
-* ``request_action`` — submit a deferred world action and pause this run
 * ``inner_monologue`` — lets the LLM emit non-dialogue reasoning
 
 All built-ins follow the ToolDef contract and receive run-local storage via
@@ -14,15 +12,16 @@ All built-ins follow the ToolDef contract and receive run-local storage via
 
 from __future__ import annotations
 
+import json
 from typing import Any, TypeVar, cast
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from annie.npc.memory.interface import (
     MEMORY_CATEGORY_SEMANTIC,
     MemoryRecord,
 )
-from annie.npc.response import ActionRequest, MemoryUpdate
+from annie.npc.core.response import MemoryUpdate
 from annie.npc.tools.base_tool import ToolContext, ToolDef
 
 _T = TypeVar("_T", bound=BaseModel)
@@ -60,14 +59,45 @@ class MemoryRecallInput(BaseModel):
     query: str = Field(..., description="Natural-language query to search memory.")
     categories: list[str] | None = Field(
         None,
-        description="Optional category filter (e.g. ['episodic', 'impression']). None = all.",
+        description="Optional category filter (e.g. ['impression', 'todo']). None = all.",
     )
     k: int = Field(5, description="Max number of records.")
+
+    @field_validator("categories", mode="before")
+    @classmethod
+    def _coerce_categories(cls, value: Any) -> Any:
+        if value is None or isinstance(value, list):
+            return value
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return None
+            if raw.startswith("["):
+                try:
+                    parsed = json.loads(raw)
+                except json.JSONDecodeError:
+                    parsed = None
+                if isinstance(parsed, list):
+                    return [str(item).strip() for item in parsed if str(item).strip()]
+            if "," in raw:
+                return [part.strip() for part in raw.split(",") if part.strip()]
+            return [raw]
+        return value
+
+    @field_validator("k", mode="before")
+    @classmethod
+    def _coerce_k(cls, value: Any) -> Any:
+        if isinstance(value, str) and value.strip().isdigit():
+            return int(value.strip())
+        return value
 
 
 class MemoryRecallTool(ToolDef):
     name = "memory_recall"
-    description = "Retrieve NPC long-term memory relevant to a query."
+    description = (
+        "Retrieve NPC long-term memory relevant to a query. "
+        'Example: {"query": "...", "categories": ["impression"], "k": 5}.'
+    )
     input_schema = MemoryRecallInput
     is_read_only = True
     allowed_routes = frozenset({"action", "dialogue"})
@@ -147,48 +177,6 @@ class MemoryStoreTool(ToolDef):
         return {"declared": True, "category": inp.category}
 
 
-class DeclareActionInput(BaseModel):
-    type: str = Field(..., description="Verb-style action label, e.g. move, give, attack.")
-    payload: dict[str, Any] = Field(default_factory=dict)
-
-
-class DeclareActionTool(ToolDef):
-    name = "declare_action"
-    description = "Declare a world action intent for the world engine to arbitrate."
-    input_schema = DeclareActionInput
-    is_read_only = False
-    allowed_routes = frozenset({"action"})
-
-    def call(self, input: BaseModel | dict, ctx: ToolContext) -> Any:
-        inp = _coerce(input, DeclareActionInput)
-        action = ActionRequest(type=inp.type, payload=inp.payload)
-        ctx.runtime.setdefault("actions", []).append(action)
-        return {"declared": True, "action": action.model_dump()}
-
-
-class RequestActionTool(ToolDef):
-    name = "request_action"
-    description = (
-        "Submit one deferred world action and pause this run. Use world_action "
-        "instead when you need an immediate observation inside the current "
-        "Executor loop."
-    )
-    input_schema = DeclareActionInput
-    is_read_only = False
-    allowed_routes = frozenset({"action"})
-
-    def call(self, input: BaseModel | dict, ctx: ToolContext) -> Any:
-        inp = _coerce(input, DeclareActionInput)
-        action = ActionRequest(type=inp.type, payload=inp.payload)
-        ctx.runtime.setdefault("actions", []).append(action)
-        ctx.runtime.setdefault("pending_action_ids", []).append(action.action_id)
-        return {
-            "requested": True,
-            "action": action.model_dump(),
-            "observation_pending": True,
-        }
-
-
 class UseSkillInput(BaseModel):
     skill_name: str = Field(..., description="Name of the skill to activate.")
     args: dict[str, Any] = Field(
@@ -259,8 +247,6 @@ def default_builtin_tools() -> list[ToolDef]:
         MemoryRecallTool(),
         MemoryGrepTool(),
         MemoryStoreTool(),
-        DeclareActionTool(),
-        RequestActionTool(),
         InnerMonologueTool(),
         UseSkillTool(),
     ]

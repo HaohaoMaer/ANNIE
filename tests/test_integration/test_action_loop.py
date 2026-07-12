@@ -34,12 +34,12 @@ def tmp_chroma(tmp_path):
     return chromadb.PersistentClient(path=str(tmp_path / "vs"))
 
 
-def test_request_action_returns_before_reflector(tmp_path, tmp_chroma):
+def test_world_action_status_is_projected_to_response(tmp_path, tmp_chroma):
     llm = _StubLLM([
         AIMessage(
             content="",
             tool_calls=[{
-                "name": "request_action",
+                "name": "world_action",
                 "args": {"type": "move", "payload": {"to": "kitchen"}},
                 "id": "call_move",
             }],
@@ -51,44 +51,11 @@ def test_request_action_returns_before_reflector(tmp_path, tmp_chroma):
 
     response = NPCAgent(llm=llm).run(engine.build_context("alice", "Go to the kitchen."))
 
-    assert len(response.actions) == 1
-    assert response.actions[0].type == "move"
+    assert len(response.tool_statuses) == 1
+    assert response.tool_statuses[0].tool_name == "world_action"
+    assert response.tool_statuses[0].status == "rejected"
     assert response.memory_updates == []
-    assert len(llm.calls) == 1
-
-
-def test_request_action_stops_remaining_planned_tasks(tmp_path, tmp_chroma):
-    llm = _StubLLM([
-        (
-            '{"decision":"plan","reason":"two stages",'
-            '"tasks":['
-            '{"description":"move first","priority":5},'
-            '{"description":"speak after moving","priority":4}'
-            ']}'
-        ),
-        AIMessage(
-            content="",
-            tool_calls=[{
-                "name": "request_action",
-                "args": {"type": "move", "payload": {"to": "kitchen"}},
-                "id": "call_move",
-            }],
-        ),
-        "This planned follow-up should not run before the action resolves.",
-        '{"reflection":"should not be consumed","facts":["bad"],"relationship_notes":[]}',
-    ])
-    engine = DefaultWorldEngine(chroma_client=tmp_chroma, history_dir=tmp_path / "hist")
-    engine.register_profile("alice", NPCProfile(name="Alice"))
-
-    ctx = engine.build_context("alice", "Move, then report.")
-    ctx.extra["action_planning"] = "always"
-    response = NPCAgent(llm=llm).run(ctx)
-
-    assert len(response.actions) == 1
-    assert response.actions[0].type == "move"
-    assert response.dialogue == ""
     assert len(llm.calls) == 2
-
 
 def test_world_action_result_stays_inside_executor_react_loop(tmp_path, tmp_chroma):
     llm = _StubLLM([
@@ -126,7 +93,12 @@ def test_world_action_result_stays_inside_executor_react_loop(tmp_path, tmp_chro
 
     response = NPCAgent(llm=llm).run(engine.build_context("alice", "Go to the kitchen."))
 
-    assert response.actions == []
+    assert [status.status for status in response.tool_statuses] == [
+        "rejected",
+        "success",
+        "success",
+    ]
+    assert response.tool_statuses[0].call_id == "call_kitchen"
     assert "kitchen" in response.dialogue
     assert len(llm.calls) == 4
     second_executor_messages = "\n".join(str(m.content) for m in llm.calls[1])
@@ -134,17 +106,17 @@ def test_world_action_result_stays_inside_executor_react_loop(tmp_path, tmp_chro
     assert "hallway" in second_executor_messages
     assert "请根据以下上下文判断是否需要多步骤计划" not in second_executor_messages
     third_executor_messages = "\n".join(str(m.content) for m in llm.calls[2])
-    assert '"status": "succeeded"' in third_executor_messages
+    assert '"status": "success"' in third_executor_messages
     assert "kitchen" in third_executor_messages
     assert "请根据以下上下文判断是否需要多步骤计划" not in third_executor_messages
 
 
-def test_drive_npc_feeds_failed_action_result_back_to_agent(tmp_path, tmp_chroma):
+def test_world_action_feeds_failed_status_back_inside_react_loop(tmp_path, tmp_chroma):
     llm = _StubLLM([
         AIMessage(
             content="",
             tool_calls=[{
-                "name": "request_action",
+                "name": "world_action",
                 "args": {"type": "move", "payload": {"to": "kitchen"}},
                 "id": "call_kitchen",
             }],
@@ -152,7 +124,7 @@ def test_drive_npc_feeds_failed_action_result_back_to_agent(tmp_path, tmp_chroma
         AIMessage(
             content="",
             tool_calls=[{
-                "name": "request_action",
+                "name": "world_action",
                 "args": {"type": "move", "payload": {"to": "hallway"}},
                 "id": "call_hallway",
             }],
@@ -163,9 +135,7 @@ def test_drive_npc_feeds_failed_action_result_back_to_agent(tmp_path, tmp_chroma
     engine.register_profile("alice", NPCProfile(name="Alice"))
     engine.set_location("alice", "study")
     engine.set_exits("study", ["hallway"])
-    agent = NPCAgent(llm=llm)
-
-    response = engine.drive_npc(agent, "alice", "Go to the kitchen.")
+    response = NPCAgent(llm=llm).run(engine.build_context("alice", "Go to the kitchen."))
 
     assert "hallway" in response.dialogue
     second_run_executor_messages = "\n".join(str(m.content) for m in llm.calls[1])

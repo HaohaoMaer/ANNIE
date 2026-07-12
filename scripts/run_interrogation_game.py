@@ -1,5 +1,4 @@
 import sys
-import os
 import logging
 from pathlib import Path
 from dotenv import load_dotenv
@@ -21,11 +20,10 @@ load_dotenv()
 # Add src to python path
 sys.path.append(str(Path(__file__).parent.parent / "src"))
 
-from annie.interrogation.engine import InterrogationEngine, GamePhase
-from annie.npc.agent import NPCAgent
-from annie.npc.llm import create_chat_model
-from annie.npc.config import load_model_config
-from annie.npc.context import AgentContext
+from annie.interrogation.engine import InterrogationEngine, GamePhase  # noqa: E402
+from annie.npc.agent import NPCAgent  # noqa: E402
+from annie.npc.model.llm import create_chat_model  # noqa: E402
+from annie.npc.model.config import load_model_config  # noqa: E402
 
 def print_banner(text):
     print("\n" + "="*60)
@@ -82,7 +80,7 @@ def run_interrogation_round(engine, llm, phase):
         try:
             idx = int(choice) - 1
             target_npc = npc_ids[idx]
-        except:
+        except Exception:
             print("输入无效。")
             continue
             
@@ -115,7 +113,7 @@ def run_interrogation_round(engine, llm, phase):
             # Fetch updated HR from engine state
             hr = engine.state.npc_heart_rates.get(target_npc, 60)
             
-            print(f">>> [AGENT END]\n")
+            print(">>> [AGENT END]\n")
 
             # --- Content Cleaning Logic ---
             raw_dialogue = response.dialogue
@@ -159,7 +157,7 @@ def run_interrogation_round(engine, llm, phase):
 def run_search_round(engine, phase):
     print_banner(f"搜证阶段：{phase.value}")
     locations = engine.state.unlocked_locations
-    print(f"可搜查地点 (请选择 2 个):")
+    print("可搜查地点 (请选择 2 个):")
     for i, loc in enumerate(locations):
         print(f"{i+1}. {loc}")
         
@@ -167,7 +165,7 @@ def run_search_round(engine, phase):
     choices = choice_str.split()
     try:
         selected = [locations[int(c)-1] for c in choices[:2]]
-    except:
+    except Exception:
         print("选择无效，搜证失败。")
         selected = []
         

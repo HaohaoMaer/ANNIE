@@ -6,7 +6,7 @@ from typing import Any, Callable, TypeVar
 
 from pydantic import BaseModel, Field
 
-from annie.npc.response import ActionResult
+from annie.npc.core.response import ActionResult
 from annie.npc.tools.base_tool import ToolContext, ToolDef
 
 T = TypeVar("T", bound=BaseModel)
@@ -24,6 +24,10 @@ class FinishScheduleSegmentInput(BaseModel):
     note: str = Field("", description="简短说明为什么当前日程段已经完成。")
 
 
+class CompleteCurrentScheduleInput(BaseModel):
+    note: str = Field("", description="简短说明为什么当前日程段已经完成。")
+
+
 class SpeakToInput(BaseModel):
     target_npc_id: str = Field(..., description="同一地点内可见 NPC 的 id。")
     text: str = Field(..., min_length=1, description="要对目标 NPC 说的话。")
@@ -35,6 +39,11 @@ class StartConversationInput(BaseModel):
         "",
         description="想要开启这次对话的简短话题或原因。",
     )
+
+
+class TalkToInput(BaseModel):
+    target_npc_id: str = Field(..., description="同一地点内想要交谈的 NPC id。")
+    topic_or_reason: str = Field("", description="本次对话的话题、短回复内容或原因。")
 
 
 class InteractWithInput(BaseModel):
@@ -53,6 +62,14 @@ class UseAffordanceInput(BaseModel):
     target_id: str = Field(..., description="当前位置或当前位置可见物体的 id。")
     affordance_id: str = Field(..., description="要执行的 affordance id。")
     note: str = Field("", description="本次执行的简短语义说明。")
+
+
+class FindAffordanceTargetsInput(BaseModel):
+    query: str = Field(..., min_length=1, description="要查找的需求或行动描述。")
+    location_id: str | None = Field(
+        None,
+        description="可选地点 id；提供后只搜索该地点及其本地物体。",
+    )
 
 
 class MoveToTool(ToolDef):
@@ -136,6 +153,26 @@ class FinishScheduleSegmentTool(ToolDef):
         return result.model_dump()
 
 
+class CompleteCurrentScheduleTool(ToolDef):
+    name = "complete_current_schedule"
+    description = (
+        "当当前日程段的目标已经被实际行动满足时，请求小镇引擎标记完成。"
+        "引擎会校验当前日程、地点和近期行动/会话证据；证据不足会拒绝。"
+    )
+    input_schema = CompleteCurrentScheduleInput
+    is_read_only = False
+    ends_activation_on_success = True
+
+    def __init__(self, complete: Callable[[str], ActionResult]) -> None:
+        self._complete = complete
+
+    def call(self, input: BaseModel | dict, ctx: ToolContext) -> Any:
+        inp = _coerce(input, CompleteCurrentScheduleInput)
+        result = self._complete(inp.note)
+        ctx.runtime.setdefault("action_results", []).append(result)
+        return result.model_dump()
+
+
 class SpeakToTool(ToolDef):
     name = "speak_to"
     description = (
@@ -175,6 +212,26 @@ class StartConversationTool(ToolDef):
     def call(self, input: BaseModel | dict, ctx: ToolContext) -> Any:
         inp = _coerce(input, StartConversationInput)
         result = self._start_conversation(inp.target_npc_id, inp.topic_or_reason)
+        ctx.runtime.setdefault("action_results", []).append(result)
+        return result.model_dump()
+
+
+class TalkToTool(ToolDef):
+    name = "talk_to"
+    description = (
+        "与同一地点可见 NPC 交谈。短回复、询问、闲聊或采访都使用这个入口；"
+        "TownWorldEngine 会托管轮次、空回复重试、结束原因和 cooldown。"
+    )
+    input_schema = TalkToInput
+    is_read_only = False
+    ends_activation_on_success = True
+
+    def __init__(self, talk_to: Callable[[str, str], ActionResult]) -> None:
+        self._talk_to = talk_to
+
+    def call(self, input: BaseModel | dict, ctx: ToolContext) -> Any:
+        inp = _coerce(input, TalkToInput)
+        result = self._talk_to(inp.target_npc_id, inp.topic_or_reason)
         ctx.runtime.setdefault("action_results", []).append(result)
         return result.model_dump()
 
@@ -234,6 +291,29 @@ class UseAffordanceTool(ToolDef):
     def call(self, input: BaseModel | dict, ctx: ToolContext) -> Any:
         inp = _coerce(input, UseAffordanceInput)
         result = self._use_affordance(inp.target_id, inp.affordance_id, inp.note)
+        ctx.runtime.setdefault("action_results", []).append(result)
+        return result.model_dump()
+
+
+class FindAffordanceTargetsTool(ToolDef):
+    name = "find_affordance_targets"
+    description = (
+        "按需求查找小镇中可执行 affordance 的地点或物体。"
+        "用于不知道应去哪里或用哪个对象时，例如送糕点、记录笔记、检查设备。"
+        "这是只读工具，不改变世界状态。"
+    )
+    input_schema = FindAffordanceTargetsInput
+    is_read_only = True
+
+    def __init__(
+        self,
+        find_affordance_targets: Callable[[str, str | None], ActionResult],
+    ) -> None:
+        self._find_affordance_targets = find_affordance_targets
+
+    def call(self, input: BaseModel | dict, ctx: ToolContext) -> Any:
+        inp = _coerce(input, FindAffordanceTargetsInput)
+        result = self._find_affordance_targets(inp.query, inp.location_id)
         ctx.runtime.setdefault("action_results", []).append(result)
         return result.model_dump()
 

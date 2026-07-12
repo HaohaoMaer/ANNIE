@@ -22,11 +22,10 @@ import chromadb
 from chromadb.api import ClientAPI
 from langchain_core.language_models import BaseChatModel
 
-from annie.npc.context import AgentContext
-from annie.npc.graph_registry import AgentGraphID
+from annie.npc.core.context import AgentContext
 from annie.npc.memory.interface import MemoryInterface
-from annie.npc.response import ActionRequest, ActionResult, AgentResponse
-from annie.npc.routes import AgentRoute
+from annie.npc.core.response import ActionRequest, ActionResult, AgentResponse
+from annie.npc.core.routes import AgentRoute
 from annie.world_engine.profile import NPCProfile, load_npc_profile, profile_to_character_prompt
 from annie.world_engine.tools import PlanTodoTool, WorldActionTool, render_todo_text
 from annie.world_engine.base import WorldEngine
@@ -79,7 +78,6 @@ class DefaultWorldEngine(WorldEngine):
             tools=[PlanTodoTool(), WorldActionTool(npc_id, self.execute_action)],
             skills=[],
             memory=memory,
-            graph_id=AgentGraphID.ACTION_EXECUTOR_DEFAULT,
             route=AgentRoute.ACTION,
             character_prompt=character_prompt,
             world_rules=self._world_rules,
@@ -109,8 +107,8 @@ class DefaultWorldEngine(WorldEngine):
             compressor.maybe_fold(scene=self._situation or None)
 
         logger.info(
-            "DefaultWorldEngine received response from %s: %d actions, reflection=%s",
-            npc_id, len(response.actions), bool(response.reflection),
+            "DefaultWorldEngine received response from %s: %d tool statuses, reflection=%s",
+            npc_id, len(response.tool_statuses), bool(response.reflection),
         )
 
     def execute_action(self, npc_id: str, action: ActionRequest) -> ActionResult:

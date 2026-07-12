@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from annie.npc.context import AgentContext
+from annie.npc.core.context import AgentContext
 from annie.npc.memory.interface import MemoryInterface
-from annie.npc.response import ActionRequest, ActionResult, AgentResponse
+from annie.npc.core.response import ActionRequest, ActionResult, AgentResponse
 from annie.world_engine.compressor import Compressor
 from annie.world_engine.history import HistoryStore
 
@@ -26,7 +26,7 @@ class WorldEngine(ABC):
 
     @abstractmethod
     def handle_response(self, npc_id: str, response: AgentResponse) -> None:
-        """Arbitrate the agent's action/memory intents and update world state."""
+        """Persist response outputs and any already-executed tool statuses."""
 
     def execute_action(self, npc_id: str, action: ActionRequest) -> ActionResult:
         """Attempt one world action and return a structured observation.
@@ -51,31 +51,17 @@ class WorldEngine(ABC):
         event: str,
         max_action_steps: int = 8,
     ) -> AgentResponse:
-        """Drive an NPC until it produces a final response or hits step budget."""
-        current_event = event
-        last_result: ActionResult | None = None
-        for _ in range(max_action_steps):
-            ctx = self.build_context(npc_id, current_event)
-            response = agent.run(ctx)  # type: ignore[attr-defined]
-            if not response.actions:
-                self.handle_response(npc_id, response)
-                return response
+        """Drive one NPC run.
 
-            result = self.execute_action(npc_id, response.actions[0])
-            last_result = result
-            current_event = _render_action_result_event(result)
-
-        observation = (
-            last_result.observation
-            if last_result is not None
-            else "NPC action loop stopped before producing a final response."
-        )
-        return AgentResponse(
-            dialogue=(
-                f"Action loop stopped after {max_action_steps} steps. "
-                f"Last observation: {observation}"
-            ),
-        )
+        World side effects happen during engine-owned tool execution inside
+        the selected NPC graph. There is no post-response declarative action
+        loop.
+        """
+        _ = max_action_steps
+        ctx = self.build_context(npc_id, event)
+        response = agent.run(ctx)  # type: ignore[attr-defined]
+        self.handle_response(npc_id, response)
+        return response
 
     # ---- Memory provisioning ------------------------------------------
     @abstractmethod
@@ -95,19 +81,3 @@ class WorldEngine(ABC):
     def step(self) -> None:
         """Advance world state one tick. Default no-op; engines override."""
         return None
-
-
-def _render_action_result_event(result: ActionResult) -> str:
-    parts = [
-        "World action result:",
-        f"- action_id: {result.action_id}",
-        f"- action_type: {result.action_type}",
-        f"- status: {result.status}",
-    ]
-    if result.reason:
-        parts.append(f"- reason: {result.reason}")
-    if result.observation:
-        parts.append(f"- observation: {result.observation}")
-    if result.facts:
-        parts.append(f"- facts: {result.facts}")
-    return "\n".join(parts)

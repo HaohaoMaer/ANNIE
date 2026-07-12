@@ -6,9 +6,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from annie.npc.planner import Planner
-from annie.npc.state import AgentState, Task
-from annie.npc.tracing import EventType, Tracer
+from annie.npc.cognition.planner import Planner
+from annie.npc.core.state import AgentState, Task
+from annie.npc.observability.tracing import EventType, Tracer
 
 
 @pytest.fixture

@@ -27,8 +27,8 @@ from dotenv import load_dotenv
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 
 from annie.npc import NPCAgent
-from annie.npc.config import load_model_config
-from annie.npc.response import ActionRequest, ActionResult, AgentResponse
+from annie.npc.model.config import load_model_config
+from annie.npc.core.response import ActionRequest, ActionResult, AgentResponse
 from annie.world_engine import DefaultWorldEngine
 from annie.world_engine.profile import NPCProfile
 from langchain_openai import ChatOpenAI

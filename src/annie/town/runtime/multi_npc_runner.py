@@ -6,8 +6,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, cast
 
-from annie.npc.context import AgentContext
-from annie.npc.response import AgentResponse
+from annie.npc.core.context import AgentContext
+from annie.npc.core.response import AgentResponse
 from annie.town.engine import TownWorldEngine
 
 
@@ -31,6 +31,7 @@ class TownMultiNpcRunResult:
     npc_ids: list[str]
     ticks: list[TownTickTrace]
     replay_paths: dict[str, Path] = field(default_factory=dict)
+    persistence_paths: dict[str, Path] = field(default_factory=dict)
     note: str = ""
     reached_end_minute: bool = False
     all_current_schedules_complete: bool = False
@@ -46,6 +47,7 @@ class TownMultiDayRunResult:
     npc_ids: list[str]
     days: list[TownMultiNpcRunResult]
     replay_paths: dict[str, Path] = field(default_factory=dict)
+    persistence_paths: dict[str, Path] = field(default_factory=dict)
     note: str = ""
 
     @property
@@ -127,12 +129,19 @@ def run_multi_npc_day(
             note = f"达到 max_ticks={max_ticks}，多 NPC 小镇运行仍未结束。"
 
     replay_paths: dict[str, Path] = {}
+    persistence_paths: dict[str, Path] = {}
     if replay_dir is not None:
-        replay_paths = engine.write_replay_artifacts(replay_dir)
+        replay_root = Path(replay_dir)
+        replay_paths = engine.write_replay_artifacts(replay_root)
+        persistence_paths = engine.save_run(
+            replay_root.parent,
+            replay_paths=replay_paths,
+        )
     return TownMultiNpcRunResult(
         npc_ids=active_npcs,
         ticks=traces,
         replay_paths=replay_paths,
+        persistence_paths=persistence_paths,
         note=note,
         reached_end_minute=reached_end_minute,
         all_current_schedules_complete=all_current_schedules_complete,
@@ -180,12 +189,19 @@ def run_multi_npc_days(
             break
 
     replay_paths: dict[str, Path] = {}
+    persistence_paths: dict[str, Path] = {}
     if replay_dir is not None:
-        replay_paths = engine.write_replay_artifacts(replay_dir)
+        replay_root = Path(replay_dir)
+        replay_paths = engine.write_replay_artifacts(replay_root)
+        persistence_paths = engine.save_run(
+            replay_root.parent,
+            replay_paths=replay_paths,
+        )
     return TownMultiDayRunResult(
         npc_ids=active_npcs,
         days=day_results,
         replay_paths=replay_paths,
+        persistence_paths=persistence_paths,
         note=note,
     )
 

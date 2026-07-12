@@ -1,0 +1,260 @@
+schema_version: 1
+id: replay_demo_town
+name: 河湾镇一天
+clock:
+  day: 1
+  minute: 480
+  stride_minutes: 10
+locations:
+  - id: home_mira
+    name: Mira 的家
+    description: 靠近河堤的小屋，厨房窗台摆着修补过的收音机。
+    exits: [{to: town_square, travel_minutes: 5}]
+    affordances:
+      - {id: rest, label: 休息, description: 在家短暂停留。}
+      - {id: sleep, label: 睡觉, description: 回家睡觉并结束一天。}
+    objects:
+      - id: radio
+        name: 收音机
+        description: 收音机反复播报傍晚集市停电的消息。
+        affordances:
+          - {id: check_broadcast, label: 收听广播, description: 确认傍晚活动安排。}
+  - id: home_ren
+    name: Ren 的家
+    description: 木匠 Ren 的家，门口堆着要送去工坊的木条。
+    exits: [{to: town_square, travel_minutes: 5}]
+    affordances:
+      - {id: rest, label: 休息, description: 在家休息。}
+      - {id: sleep, label: 睡觉, description: 回家睡觉并结束一天。}
+  - id: home_sora
+    name: Sora 的家
+    description: 诊所护士 Sora 的公寓，墙上贴着巡诊表。
+    exits: [{to: town_square, travel_minutes: 5}]
+    affordances:
+      - {id: rest, label: 休息, description: 在家休息。}
+      - {id: sleep, label: 睡觉, description: 回家睡觉并结束一天。}
+  - id: town_square
+    name: 河湾广场
+    description: 河湾镇的中心，公告栏提醒大家傍晚集市可能改期。
+    exits:
+      - {to: home_mira, travel_minutes: 5}
+      - {to: home_ren, travel_minutes: 5}
+      - {to: home_sora, travel_minutes: 5}
+      - {to: cafe, travel_minutes: 3}
+      - {to: library, travel_minutes: 4}
+      - {to: clinic, travel_minutes: 4}
+      - {to: market, travel_minutes: 4}
+      - {to: workshop, travel_minutes: 6}
+      - {to: river_pier, travel_minutes: 6}
+    affordances:
+      - {id: meet, label: 碰面, description: 等人或交换镇内消息。}
+    objects:
+      - id: event_board
+        name: 活动公告栏
+        description: 写着“灯会物资需在日落前确认”的公告。
+        affordances:
+          - {id: read_event_notice, label: 阅读活动公告, description: 查看灯会和停电调整。}
+  - id: cafe
+    name: 晨星咖啡馆
+    description: 镇民早晨交换消息的咖啡馆。
+    exits: [{to: town_square, travel_minutes: 3}]
+    affordances:
+      - {id: sit, label: 入座, description: 短暂停留并交谈。}
+    objects:
+      - id: cafe_counter
+        name: 咖啡柜台
+        description: 柜台上放着灯会赞助名单。
+        affordances:
+          - {id: order_coffee, label: 点咖啡, description: 点咖啡并听取早晨消息。}
+  - id: library
+    name: 镇图书馆
+    description: 安静的图书馆，也是灯会志愿者登记点。
+    exits: [{to: town_square, travel_minutes: 4}]
+    affordances:
+      - {id: study, label: 查资料, description: 查阅地方记录。}
+    objects:
+      - id: volunteer_sheet
+        name: 志愿者登记表
+        description: 表上缺少晚间巡灯的人手。
+        affordances:
+          - {id: update_sheet, label: 更新登记表, description: 写下志愿者安排。}
+  - id: clinic
+    name: 河湾诊所
+    description: Sora 工作的诊所，药品柜旁放着巡诊包。
+    exits: [{to: town_square, travel_minutes: 4}]
+    affordances:
+      - {id: consult, label: 问诊, description: 提供基础问诊。}
+    objects:
+      - id: first_aid_bag
+        name: 巡诊包
+        description: 傍晚活动需要带到集市的急救包。
+        affordances:
+          - {id: pack_supplies, label: 整理急救包, description: 准备灯会用医疗用品。}
+  - id: market
+    name: 河湾集市
+    description: 午后最热闹的集市，摊主担心停电影响灯会。
+    exits: [{to: town_square, travel_minutes: 4}, {to: river_pier, travel_minutes: 5}]
+    affordances:
+      - {id: shop, label: 采购, description: 采购灯会用品。}
+    objects:
+      - id: lantern_crates
+        name: 灯笼箱
+        description: 几箱需要清点的纸灯笼。
+        affordances:
+          - {id: count_lanterns, label: 清点灯笼, description: 核对灯会灯笼数量。}
+  - id: workshop
+    name: Ren 的修理工坊
+    description: 工坊里堆着木料和发电机零件。
+    exits: [{to: town_square, travel_minutes: 6}]
+    affordances:
+      - {id: repair_service, label: 请求修理, description: 请求或执行修理。}
+    objects:
+      - id: generator
+        name: 小型发电机
+        description: 灯会备用发电机，上午还没有测试。
+        affordances:
+          - {id: test_generator, label: 测试发电机, description: 确认发电机能否支撑灯会。}
+  - id: river_pier
+    name: 河湾码头
+    description: 傍晚灯会的集合点，可以看见河面和灯绳。
+    exits: [{to: town_square, travel_minutes: 6}, {to: market, travel_minutes: 5}]
+    affordances:
+      - {id: prepare_lanterns, label: 准备灯会, description: 布置灯绳和集合点。}
+    objects:
+      - id: lantern_rope
+        name: 灯绳
+        description: 等待挂上纸灯笼的长绳。
+        affordances:
+          - {id: hang_lanterns, label: 挂灯笼, description: 完成灯会准备。}
+residents:
+  - id: mira
+    name: Mira
+    starting_location: home_mira
+    home_location: home_mira
+    sleep_location: home_mira
+    default_wake_window: [420, 480]
+    default_sleep_window: [1320, 1410]
+    persona:
+      currently: 正在协调河湾灯会临时调整。
+      lifestyle: 清晨查看公告，中午采购，傍晚去码头。
+      background: 镇委员会志愿协调员。
+      traits: [负责, 善于沟通]
+    relationships:
+      ren: 依赖 Ren 测试备用发电机。
+      sora: 会提醒 Sora 带急救包到码头。
+    schedule:
+      - {start_minute: 480, duration_minutes: 30, location: home_mira, intent: 收听广播确认灯会风险}
+      - {start_minute: 520, duration_minutes: 30, location: town_square, intent: 阅读活动公告}
+      - {start_minute: 570, duration_minutes: 30, location: cafe, intent: 和镇民交换消息}
+      - {start_minute: 660, duration_minutes: 40, location: market, intent: 清点灯笼箱}
+      - {start_minute: 780, duration_minutes: 40, location: river_pier, intent: 检查码头灯绳}
+    memory_seeds:
+      - id: mira_event_thread
+        content: Mira 知道傍晚集市可能停电，必须确认发电机、急救包和灯笼数量。
+        category: semantic
+        metadata: {thread: lantern_festival}
+  - id: ren
+    name: Ren
+    starting_location: home_ren
+    home_location: home_ren
+    sleep_location: home_ren
+    default_wake_window: [430, 500]
+    default_sleep_window: [1320, 1410]
+    persona:
+      currently: 担心备用发电机无法在灯会前修好。
+      lifestyle: 上午在工坊，下午去广场确认安排。
+      background: 木匠兼修理工。
+      traits: [谨慎, 手艺好]
+    relationships:
+      mira: 愿意帮 Mira 处理灯会设备。
+      theo: 经常请 Theo 帮忙记录修理清单。
+    schedule:
+      - {start_minute: 500, duration_minutes: 40, location: workshop, intent: 测试备用发电机}
+      - {start_minute: 570, duration_minutes: 30, location: cafe, intent: 告诉大家发电机状态}
+      - {start_minute: 720, duration_minutes: 40, location: town_square, intent: 查看活动公告}
+      - {start_minute: 820, duration_minutes: 40, location: river_pier, intent: 检查灯会支架}
+    memory_seeds:
+      - id: ren_generator
+        content: Ren 昨晚发现备用发电机启动慢，今天必须重新测试。
+        category: semantic
+        metadata: {thread: lantern_festival}
+  - id: sora
+    name: Sora
+    starting_location: home_sora
+    home_location: home_sora
+    sleep_location: home_sora
+    default_wake_window: [420, 480]
+    default_sleep_window: [1320, 1410]
+    persona:
+      currently: 要在诊所值班并准备灯会急救包。
+      lifestyle: 早晨到诊所，午后巡诊。
+      background: 河湾诊所护士。
+      traits: [冷静, 细心]
+    relationships:
+      mira: 会把急救准备反馈给 Mira。
+      lio: 经常提醒 Lio 不要在码头奔跑。
+    schedule:
+      - {start_minute: 500, duration_minutes: 50, location: clinic, intent: 整理急救包}
+      - {start_minute: 600, duration_minutes: 30, location: town_square, intent: 查看人流安排}
+      - {start_minute: 760, duration_minutes: 50, location: market, intent: 巡看集市摊位}
+      - {start_minute: 840, duration_minutes: 40, location: river_pier, intent: 把急救包带到码头}
+    memory_seeds:
+      - id: sora_first_aid
+        content: Sora 记得灯会去年有人在码头滑倒，今年要提前准备急救包。
+        category: semantic
+        metadata: {thread: lantern_festival}
+  - id: theo
+    name: Theo
+    starting_location: library
+    home_location: library
+    sleep_location: library
+    default_wake_window: [450, 510]
+    default_sleep_window: [1320, 1410]
+    persona:
+      currently: 在图书馆登记志愿者并整理地方记录。
+      lifestyle: 白天守图书馆，傍晚去广场。
+      background: 图书管理员。
+      traits: [安静, 记忆好]
+    relationships:
+      ren: 会帮 Ren 记录工具借还。
+      mira: 帮 Mira 维护志愿者名单。
+    schedule:
+      - {start_minute: 480, duration_minutes: 50, location: library, intent: 更新志愿者登记表}
+      - {start_minute: 610, duration_minutes: 30, location: town_square, intent: 贴出志愿者缺口}
+      - {start_minute: 800, duration_minutes: 40, location: river_pier, intent: 核对巡灯名单}
+    memory_seeds:
+      - id: theo_roster
+        content: Theo 发现晚间巡灯名单少一人，需要在中午前通知 Mira。
+        category: semantic
+        metadata: {thread: lantern_festival}
+  - id: lio
+    name: Lio
+    starting_location: market
+    home_location: market
+    sleep_location: market
+    default_wake_window: [430, 500]
+    default_sleep_window: [1320, 1410]
+    persona:
+      currently: 帮集市摊主搬灯笼箱。
+      lifestyle: 上午在集市，下午往返码头。
+      background: 年轻跑腿员。
+      traits: [活跃, 好奇]
+    relationships:
+      sora: 尊重 Sora 的安全提醒。
+      mira: 想帮 Mira 把灯会办顺利。
+    schedule:
+      - {start_minute: 500, duration_minutes: 40, location: market, intent: 清点灯笼箱}
+      - {start_minute: 590, duration_minutes: 30, location: cafe, intent: 打听发电机消息}
+      - {start_minute: 700, duration_minutes: 50, location: river_pier, intent: 搬运灯绳}
+      - {start_minute: 830, duration_minutes: 30, location: town_square, intent: 回报码头准备进度}
+    memory_seeds:
+      - id: lio_lanterns
+        content: Lio 知道有一箱灯笼潮湿，最好让 Mira 或 Ren 检查。
+        category: semantic
+        metadata: {thread: lantern_festival}
+memory_seeds:
+  - id: festival_thread
+    resident: mira
+    content: 河湾灯会贯穿全天，停电、发电机、急救包和志愿者名单会影响大家的安排。
+    category: semantic
+    metadata: {thread: lantern_festival, scope: town}

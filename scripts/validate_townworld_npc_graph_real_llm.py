@@ -1,11 +1,11 @@
-"""Validate TownWorldEngine against the graph-id NPC layer with a real LLM.
+"""Validate TownWorldEngine against the route-id NPC layer with a real LLM.
 
 Usage:
     conda run -n annie python scripts/validate_townworld_npc_graph_real_llm.py
 
 The script reads ``config/model_config.yaml`` and ``.env``. It runs a bounded
 multi-NPC TownWorld scenario through the real ``NPCAgent`` and records every
-requested/returned NPC cognitive graph id.
+requested/returned NPC cognitive route id.
 """
 
 from __future__ import annotations
@@ -25,10 +25,10 @@ from langchain_core.messages import AIMessage, BaseMessage
 from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
-from annie.npc import AgentGraphID, NPCAgent
-from annie.npc.config import load_model_config
-from annie.npc.context import AgentContext
-from annie.npc.response import AgentResponse
+from annie.npc import RouteID, NPCAgent
+from annie.npc.model.config import load_model_config
+from annie.npc.core.context import AgentContext
+from annie.npc.core.response import AgentResponse
 from annie.town import (
     ReflectionEvidence,
     TownMultiNpcRunResult,
@@ -42,8 +42,8 @@ from annie.town import (
 class AgentRunRecord:
     npc_id: str
     input_event: str
-    requested_graph_id: str
-    response_graph_id: str
+    requested_route: str
+    response_route_id: str
     route: str
     bound_tools: list[str]
     dialogue: str
@@ -111,7 +111,7 @@ class TraceChatModel:
 
 
 class RecordingNPCAgent:
-    """Wraps NPCAgent and records graph-id proof for each TownWorld call."""
+    """Wraps NPCAgent and records route-id proof for each TownWorld call."""
 
     def __init__(self, agent: NPCAgent) -> None:
         self._agent = agent
@@ -122,8 +122,8 @@ class RecordingNPCAgent:
         record = AgentRunRecord(
             npc_id=context.npc_id,
             input_event=context.input_event,
-            requested_graph_id=str(context.graph_id or ""),
-            response_graph_id=response.graph_id,
+            requested_route=str(context.route),
+            response_route_id=response.route_id,
             route=str(response.route),
             bound_tools=[str(item) for item in response.debug.get("bound_tools", [])],
             dialogue=response.dialogue[:160],
@@ -131,10 +131,10 @@ class RecordingNPCAgent:
             reflection_preview=response.reflection[:160],
         )
         self.records.append(record)
-        print_header("NPC graph proof")
+        print_header("NPC route proof")
         print(f"npc={record.npc_id}")
-        print(f"requested_graph_id={record.requested_graph_id or '<compat-default>'}")
-        print(f"response_graph_id={record.response_graph_id}")
+        print(f"requested_route={record.requested_route}")
+        print(f"response_route_id={record.response_route_id}")
         print(f"route={record.route}")
         print(f"bound_tools={', '.join(record.bound_tools) or 'none'}")
         if record.dialogue:
@@ -209,8 +209,8 @@ def main() -> None:
     print_world(engine)
     print_action_log(engine)
     print_replay_paths(result)
-    print_graph_summary(agent.records)
-    validate_graph_coverage(agent.records, args)
+    print_route_summary(agent.records)
+    validate_route_coverage(agent.records, args)
 
     if traced_model.call_count <= 0:
         raise SystemExit("real LLM call count is 0; validation did not exercise the model")
@@ -224,7 +224,7 @@ def run_planning_phase(
     npc_ids: list[str],
     args: argparse.Namespace,
 ) -> None:
-    print_header("phase 1: resident planning via structured graph")
+    print_header("phase 1: resident planning via structured route")
     for npc_id in npc_ids:
         before = len(agent.records)
         accepted = engine.generate_day_plan_for_resident(
@@ -240,11 +240,11 @@ def run_planning_phase(
                 f"  {minute_label(segment.start_minute)}-{minute_label(segment.end_minute)} "
                 f"{segment.location_id}: {segment.intent}"
             )
-        require_graph(
+        require_route(
             record,
-            AgentGraphID.OUTPUT_STRUCTURED_JSON,
-            f"planning graph for {npc_id}",
-            args.allow_graph_mismatch,
+            RouteID.OUTPUT_STRUCTURED_JSON,
+            f"planning route for {npc_id}",
+            args.allow_route_mismatch,
         )
 
 
@@ -255,7 +255,7 @@ def run_action_phase(
     replay_dir: Path,
     args: argparse.Namespace,
 ) -> TownMultiNpcRunResult:
-    print_header("phase 2: bounded multi-NPC ticks via action graph")
+    print_header("phase 2: bounded multi-NPC ticks via action route")
     result = run_multi_npc_day(
         engine,
         agent,
@@ -280,7 +280,7 @@ def run_forced_conversation_phase(
     speaker_id: str,
     listener_id: str,
 ) -> None:
-    print_header("phase 3: forced managed dialogue via dialogue graph")
+    print_header("phase 3: forced managed dialogue via dialogue route")
     previous_agent = getattr(engine, "_active_step_agent")
     setattr(engine, "_active_step_agent", agent)
     try:
@@ -299,7 +299,7 @@ def run_reflection_phase(
     agent: RecordingNPCAgent,
     npc_id: str,
 ) -> None:
-    print_header("phase 4: forced reflection via reflection graph")
+    print_header("phase 4: forced reflection via reflection route")
     resident = engine.state.resident_for(npc_id)
     if resident is None:
         raise SystemExit(f"unknown resident: {npc_id}")
@@ -318,18 +318,18 @@ def run_reflection_phase(
     print(f"reflection persisted={ok}")
 
 
-def require_graph(
+def require_route(
     record: AgentRunRecord,
-    expected: AgentGraphID,
+    expected: RouteID,
     label: str,
     allow_mismatch: bool,
 ) -> None:
-    if record.requested_graph_id == expected and record.response_graph_id == expected:
+    if record.response_route_id == expected:
         print(f"PASS {label}: {expected}")
         return
     message = (
-        f"FAIL {label}: requested={record.requested_graph_id}, "
-        f"response={record.response_graph_id}, expected={expected}"
+        f"FAIL {label}: requested={record.requested_route}, "
+        f"response={record.response_route_id}, expected={expected}"
     )
     if allow_mismatch:
         print(message)
@@ -337,46 +337,45 @@ def require_graph(
     raise SystemExit(message)
 
 
-def validate_graph_coverage(records: list[AgentRunRecord], args: argparse.Namespace) -> None:
+def validate_route_coverage(records: list[AgentRunRecord], args: argparse.Namespace) -> None:
     expected = {
-        str(AgentGraphID.ACTION_EXECUTOR_DEFAULT),
+        str(RouteID.ACTION_EXECUTOR_DEFAULT),
     }
     if not args.skip_planning:
-        expected.add(str(AgentGraphID.OUTPUT_STRUCTURED_JSON))
+        expected.add(str(RouteID.OUTPUT_STRUCTURED_JSON))
     if not args.skip_conversation:
-        expected.add(str(AgentGraphID.DIALOGUE_MEMORY_THEN_OUTPUT))
+        expected.add(str(RouteID.DIALOGUE_MEMORY_THEN_OUTPUT))
     if not args.skip_reflection:
-        expected.add(str(AgentGraphID.REFLECTION_EVIDENCE_TO_MEMORY_CANDIDATE))
+        expected.add(str(RouteID.REFLECTION_EVIDENCE_TO_MEMORY_CANDIDATE))
 
-    seen_requested = {record.requested_graph_id for record in records if record.requested_graph_id}
-    seen_response = {record.response_graph_id for record in records if record.response_graph_id}
-    missing = sorted(expected - seen_requested - seen_response)
+    seen_response = {record.response_route_id for record in records if record.response_route_id}
+    missing = sorted(expected - seen_response)
     if not missing:
-        print("PASS graph coverage")
+        print("PASS route coverage")
         return
-    message = f"missing expected graph ids: {', '.join(missing)}"
-    if args.allow_graph_mismatch:
-        print(f"FAIL graph coverage: {message}")
+    message = f"missing expected route ids: {', '.join(missing)}"
+    if args.allow_route_mismatch:
+        print(f"FAIL route coverage: {message}")
         return
     raise SystemExit(message)
 
 
-def print_graph_summary(records: list[AgentRunRecord]) -> None:
-    print_header("graph summary")
-    requested = Counter(record.requested_graph_id or "<compat-default>" for record in records)
-    responded = Counter(record.response_graph_id or "<none>" for record in records)
-    print("requested graph ids:")
-    for graph_id, count in sorted(requested.items()):
-        print(f"- {graph_id}: {count}")
-    print("response graph ids:")
-    for graph_id, count in sorted(responded.items()):
-        print(f"- {graph_id}: {count}")
+def print_route_summary(records: list[AgentRunRecord]) -> None:
+    print_header("route summary")
+    requested = Counter(record.requested_route or "<compat-default>" for record in records)
+    responded = Counter(record.response_route_id or "<none>" for record in records)
+    print("requested route ids:")
+    for route_id, count in sorted(requested.items()):
+        print(f"- {route_id}: {count}")
+    print("response route ids:")
+    for route_id, count in sorted(responded.items()):
+        print(f"- {route_id}: {count}")
     print("runs:")
     for index, record in enumerate(records, start=1):
         print(
             f"{index:02d}. npc={record.npc_id} route={record.route} "
-            f"requested={record.requested_graph_id or '<compat-default>'} "
-            f"response={record.response_graph_id}"
+            f"requested={record.requested_route or '<compat-default>'} "
+            f"response={record.response_route_id}"
         )
 
 
@@ -414,7 +413,7 @@ def print_replay_paths(result: TownMultiNpcRunResult) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Validate TownWorldEngine real-LLM execution through NPC graph ids."
+        description="Validate TownWorldEngine real-LLM execution through NPC route ids."
     )
     parser.add_argument("--model-config", default="config/model_config.yaml")
     parser.add_argument("--npcs", default="alice,bob,clara")
@@ -430,7 +429,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-conversation", action="store_true")
     parser.add_argument("--skip-reflection", action="store_true")
     parser.add_argument("--allow-incomplete", action="store_true")
-    parser.add_argument("--allow-graph-mismatch", action="store_true")
+    parser.add_argument("--allow-route-mismatch", action="store_true")
     parser.add_argument("--verbose-messages", action="store_true")
     return parser.parse_args()
 

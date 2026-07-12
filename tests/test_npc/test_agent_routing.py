@@ -3,11 +3,15 @@ from __future__ import annotations
 from langchain_core.messages import AIMessage, BaseMessage
 
 from annie.npc.agent import NPCAgent
-from annie.npc.context import AgentContext
-from annie.npc.graph_registry import AgentGraphID, UnknownAgentGraphError, list_graph_ids
+from annie.npc.core.context import AgentContext
+from annie.npc.route.registry import (
+    get_route_entry,
+    list_route_ids,
+)
 from annie.npc.memory.interface import MemoryRecord
-from annie.npc.response import AgentResponse
-from annie.npc.routes import AgentRoute
+from annie.npc.core.response import AgentResponse
+from annie.npc.core.routes import AgentRoute
+from annie.npc.route.route_model import NodeID, RouteID
 from annie.npc.tools.base_tool import ToolDef
 from annie.npc.tools.tool_registry import ToolRegistry
 
@@ -87,10 +91,15 @@ def test_default_context_uses_action_route_without_pre_planner():
 
     assert isinstance(response, AgentResponse)
     assert response.route == AgentRoute.ACTION
-    assert response.graph_id == AgentGraphID.ACTION_EXECUTOR_DEFAULT
-    assert response.debug["graph_id"] == AgentGraphID.ACTION_EXECUTOR_DEFAULT
+    assert response.route_id == RouteID.ACTION_EXECUTOR_DEFAULT
+    assert response.debug["route_id"] == RouteID.ACTION_EXECUTOR_DEFAULT
     assert response.debug["route_kind"] == AgentRoute.ACTION
-    assert response.debug["node_path"] == ["executor"]
+    assert response.debug["node_path"] == [
+        "preparation.action",
+        "memory.context",
+        "action.tool_execution",
+    ]
+    assert response.debug["node_composition"] == ["preparation", "memory", "action"]
     assert response.dialogue == "NPC acts once."
     assert len(llm.calls) == 1
     assert "请根据以下上下文判断是否需要多步骤计划" not in llm.calls[0][-1].content
@@ -105,26 +114,55 @@ def test_action_planning_hint_invokes_run_local_planner():
         "NPC completes the planned step.",
     ])
 
-    response = NPCAgent(llm=llm).run(
-        _ctx(graph_id=AgentGraphID.ACTION_PLAN_EXECUTE)
-    )
+    response = NPCAgent(llm=llm).run(_ctx(extra={"action_planning": "plan"}))
 
     assert response.route == AgentRoute.ACTION
-    assert response.graph_id == AgentGraphID.ACTION_PLAN_EXECUTE
-    assert response.debug["node_path"] == ["planner", "executor"]
+    assert response.route_id == RouteID.ACTION_PLAN_EXECUTE
+    assert response.debug["node_path"] == [
+        "memory.context",
+        "planning.run_local",
+        "action.tool_execution",
+    ]
+    assert response.debug["node_composition"] == [
+        "memory",
+        "planning",
+        "preparation",
+        "action",
+    ]
     assert response.dialogue == "NPC completes the planned step."
     assert len(llm.calls) == 2
     assert "请根据以下上下文判断是否需要多步骤计划" in llm.calls[0][-1].content
     assert "<task>" in llm.calls[1][-1].content
 
 
-def test_legacy_direct_json_maps_to_structured_output_route():
+def test_action_planning_hint_resolves_to_plan_route():
+    llm = _StubLLM([
+        (
+            '{"decision":"plan","reason":"two steps",'
+            '"tasks":[{"description":"check context","priority":5}]}'
+        ),
+        "NPC completes the planned step.",
+    ])
+
+    response = NPCAgent(llm=llm).run(
+        _ctx(extra={"action_planning": "plan"})
+    )
+
+    assert response.route_id == RouteID.ACTION_PLAN_EXECUTE
+    assert response.debug["node_path"] == [
+        "memory.context",
+        "planning.run_local",
+        "action.tool_execution",
+    ]
+
+
+def test_structured_json_route_returns_structured_output():
     llm = _StubLLM(['{"ok": true}'])
 
-    response = NPCAgent(llm=llm).run(_ctx(extra={"npc_direct_mode": "json"}))
+    response = NPCAgent(llm=llm).run(_ctx(route=AgentRoute.STRUCTURED_JSON))
 
     assert response.route == AgentRoute.STRUCTURED_JSON
-    assert response.graph_id == AgentGraphID.OUTPUT_STRUCTURED_JSON
+    assert response.route_id == RouteID.OUTPUT_STRUCTURED_JSON
     assert response.structured_output == '{"ok": true}'
     assert response.dialogue == ""
     assert response.debug["bound_tools"] == []
@@ -138,7 +176,7 @@ def test_reflection_route_has_no_tools_and_no_implicit_memory_context():
     response = NPCAgent(llm=llm).run(_ctx(route=AgentRoute.REFLECTION, memory=memory))
 
     assert response.route == AgentRoute.REFLECTION
-    assert response.graph_id == AgentGraphID.REFLECTION_EVIDENCE_TO_MEMORY_CANDIDATE
+    assert response.route_id == RouteID.REFLECTION_EVIDENCE_TO_MEMORY_CANDIDATE
     assert response.reflection == "我记住了这件事。"
     assert response.debug["bound_tools"] == []
     assert memory.build_context_calls == 0
@@ -168,7 +206,7 @@ def test_dialogue_route_exposes_memory_tools_but_not_world_actions():
     )
 
     assert response.route == AgentRoute.DIALOGUE
-    assert response.graph_id == AgentGraphID.DIALOGUE_MEMORY_THEN_OUTPUT
+    assert response.route_id == RouteID.DIALOGUE_MEMORY_THEN_OUTPUT
     assert response.dialogue == "我记得 Alice。"
     assert llm.bound_tool_names
     assert llm.bound_tool_names[0] == [
@@ -198,78 +236,35 @@ def test_disabled_tools_only_narrows_route_allowlist():
     assert "world_tool" not in registry.list_tools()
 
 
-def test_explicit_graph_id_takes_precedence_over_route():
-    llm = _StubLLM(['{"ok": true}'])
-
-    response = NPCAgent(llm=llm).run(
-        _ctx(
-            graph_id=AgentGraphID.OUTPUT_STRUCTURED_JSON,
-            route=AgentRoute.DIALOGUE,
-        )
-    )
-
-    assert response.route == AgentRoute.STRUCTURED_JSON
-    assert response.graph_id == AgentGraphID.OUTPUT_STRUCTURED_JSON
-    assert response.structured_output == '{"ok": true}'
-    assert response.debug["route_kind"] == AgentRoute.STRUCTURED_JSON
-
-
-def test_unknown_graph_id_fails_without_fallback():
-    llm = _StubLLM(["would be fallback"])
-
-    try:
-        NPCAgent(llm=llm).run(_ctx(graph_id="town.schedule_generation"))
-    except UnknownAgentGraphError as exc:
-        assert "town.schedule_generation" in str(exc)
-    else:
-        raise AssertionError("unknown graph_id did not fail")
-
-    assert llm.calls == []
-
-
-def test_route_values_map_to_default_graph_ids():
+def test_route_values_map_to_default_route_ids():
     cases = [
-        (AgentRoute.ACTION, AgentGraphID.ACTION_EXECUTOR_DEFAULT),
-        (AgentRoute.DIALOGUE, AgentGraphID.DIALOGUE_MEMORY_THEN_OUTPUT),
-        (AgentRoute.STRUCTURED_JSON, AgentGraphID.OUTPUT_STRUCTURED_JSON),
-        (AgentRoute.REFLECTION, AgentGraphID.REFLECTION_EVIDENCE_TO_MEMORY_CANDIDATE),
+        (AgentRoute.ACTION, RouteID.ACTION_EXECUTOR_DEFAULT),
+        (AgentRoute.DIALOGUE, RouteID.DIALOGUE_MEMORY_THEN_OUTPUT),
+        (AgentRoute.STRUCTURED_JSON, RouteID.OUTPUT_STRUCTURED_JSON),
+        (AgentRoute.REFLECTION, RouteID.REFLECTION_EVIDENCE_TO_MEMORY_CANDIDATE),
     ]
 
-    for route, graph_id in cases:
+    for route, route_id in cases:
         llm = _StubLLM(["{}" if route == AgentRoute.STRUCTURED_JSON else "ok"])
         response = NPCAgent(llm=llm).run(_ctx(route=route))
-        assert response.graph_id == graph_id
+        assert response.route_id == route_id
 
 
-def test_legacy_direct_modes_map_to_default_graph_ids():
-    cases = [
-        ("dialogue", AgentGraphID.DIALOGUE_MEMORY_THEN_OUTPUT),
-        ("json", AgentGraphID.OUTPUT_STRUCTURED_JSON),
-        ("reflection", AgentGraphID.REFLECTION_EVIDENCE_TO_MEMORY_CANDIDATE),
-    ]
-
-    for direct_mode, graph_id in cases:
-        llm = _StubLLM(["ok"])
-        response = NPCAgent(llm=llm).run(_ctx(extra={"npc_direct_mode": direct_mode}))
-        assert response.graph_id == graph_id
-
-
-def test_world_provided_graph_structure_is_not_context_contract():
+def test_world_provided_route_structure_is_not_context_contract():
     context = AgentContext(
         npc_id="npc1",
         input_event="event",
         memory=_Memory(),
-        graph_id=AgentGraphID.DIALOGUE_MEMORY_THEN_OUTPUT,
         nodes=["planner", "executor"],
         edges=[("planner", "executor")],
     )
 
-    assert context.graph_id == AgentGraphID.DIALOGUE_MEMORY_THEN_OUTPUT
+    assert context.route == AgentRoute.ACTION
     assert not hasattr(context, "nodes")
     assert not hasattr(context, "edges")
 
 
-def test_registered_graph_ids_are_generic():
+def test_registered_route_ids_are_generic():
     forbidden = {
         "town",
         "schedule",
@@ -281,5 +276,26 @@ def test_registered_graph_ids_are_generic():
         "phase",
     }
 
-    for graph_id in list_graph_ids():
-        assert not any(term in graph_id for term in forbidden)
+    for route_id in list_route_ids():
+        assert not any(term in route_id for term in forbidden)
+
+
+def test_registry_entries_declare_generic_node_composition():
+    action_entry = get_route_entry(RouteID.ACTION_EXECUTOR_DEFAULT)
+    dialogue_entry = get_route_entry(RouteID.DIALOGUE_MEMORY_THEN_OUTPUT)
+    json_entry = get_route_entry(RouteID.OUTPUT_STRUCTURED_JSON)
+
+    assert action_entry.node_composition == ("preparation", "memory", "action")
+    assert dialogue_entry.node_composition == ("dialogue",)
+    assert json_entry.node_composition == ("structured_output",)
+
+
+def test_registry_entries_reference_route_specs():
+    action_entry = get_route_entry(RouteID.ACTION_PLAN_EXECUTE)
+    dialogue_entry = get_route_entry(RouteID.DIALOGUE_MEMORY_THEN_OUTPUT)
+
+    assert action_entry.route_spec.entry_node == NodeID.MEMORY_CONTEXT
+    assert NodeID.PLANNING_RUN_LOCAL in action_entry.route_spec.allowed_nodes
+    assert NodeID.ACTION_TOOL_EXECUTION in action_entry.route_spec.allowed_nodes
+    assert NodeID.PLANNING_RUN_LOCAL not in dialogue_entry.route_spec.allowed_nodes
+    assert NodeID.ACTION_TOOL_EXECUTION not in dialogue_entry.route_spec.allowed_nodes

@@ -6,8 +6,8 @@ from types import SimpleNamespace
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from annie.npc.executor import EXECUTOR_SYSTEM_TEMPLATE, SKIP_TASK_MARKER, Executor
-from annie.npc.prompts import (
+from annie.npc.cognition.executor import EXECUTOR_SYSTEM_TEMPLATE, SKIP_TASK_MARKER, Executor
+from annie.npc.cognition.prompts import (
     EXECUTOR_SYSTEM_PROMPT,
     MEMORY_CATEGORIES_BLOCK,
     PLANNER_SYSTEM_PROMPT,
@@ -18,7 +18,7 @@ from annie.npc.prompts import (
     render_identity,
 )
 from annie.npc.runtime.tool_dispatcher import ToolDispatcher
-from annie.npc.state import Task
+from annie.npc.core.state import Task
 
 
 def test_render_identity_includes_name_and_prompt():

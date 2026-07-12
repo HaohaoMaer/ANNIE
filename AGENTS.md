@@ -1,28 +1,9 @@
-# ANNIE Codex Guide
-
-This file is the primary project guide for Codex. `CLAUDE.md` is kept only as a
-compatibility pointer and should not be treated as the source of truth.
-
 ## Repository Status
-
-ANNIE is mid-refactor. The old end-to-end "Midnight Train" murder-mystery demo
-was built on deleted legacy coupling layers. The current architecture is a
-strict two-layer split:
-
-- `src/annie/npc/`: stateless, business-agnostic NPC Agent framework.
-- `src/annie/world_engine/`: world state, memory backends, business tools,
-  action arbitration, scene progression, and concrete engines.
-
-The old demo paths (`scripts/run_midnight_train_demo.py`, `午夜列车/`, legacy
-`web/` assumptions) are not expected to work until they are rebuilt on the new
-architecture.
 
 Source of truth for large architectural work:
 
 - Synced specs: `openspec/specs/`
 - Active changes: `openspec/changes/`
-- Archived refactor context:
-  `openspec/changes/archive/2026-04-12-decouple-npc-world-engine/`
 
 ## Common Commands
 
@@ -69,9 +50,11 @@ store.
 
 - Prefer editing through `apply_patch` for manual file changes.
 - Use `rg` / `rg --files` for search.
-- Do not revive deleted legacy modules (`cognitive/`, `perception.py`, old
-  `BaseTool`, old Jinja-driven `BaseSkill`).
 - Keep changes scoped to the requested behavior and the active OpenSpec change.
+- Do not keep obsolete compatibility code just to preserve old internal
+  implementations. If an external API must remain stable, map it directly to
+  the new implementation and delete unused wrappers, builders, marker nodes,
+  fallback paths, and tests that only assert removed internals.
 - Do not modify generated Chroma/vector-store data unless the task explicitly
   asks for data regeneration.
 - Treat untracked project content as user work. Do not delete or overwrite it
@@ -137,9 +120,6 @@ Executor system prompts must keep stable XML sections:
 <available_skills>
 ```
 
-Planner is skip-first. It should return `{"skip": true, ...}` for simple single
-turn events and only emit tasks for genuine multi-stage sequences.
-
 ### World Engine Layer: `src/annie/world_engine/`
 
 This layer owns all business complexity:
@@ -196,14 +176,3 @@ Canonical tests for the refactored architecture:
 
 Older suites may predate the refactor. Do not fix them piecemeal unless the
 active task is specifically about that compatibility work.
-
-## Concrete Game Lines
-
-Current content/engine work includes:
-
-- `double_shadow/` and `src/annie/interrogation/`: Chinese interrogation and
-  evidence-search murder-mystery prototype.
-- `src/annie/war_game/`: three-faction language-deception strategy game used to
-  exercise the architecture end to end.
-- `web/`: frontend/backend work still contains legacy assumptions and should be
-  migrated deliberately before being treated as the main runnable product.

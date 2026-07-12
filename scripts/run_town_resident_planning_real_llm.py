@@ -30,9 +30,9 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
-from annie.npc.config import load_model_config
-from annie.npc.context import AgentContext
-from annie.npc.response import AgentResponse
+from annie.npc.model.config import load_model_config
+from annie.npc.core.context import AgentContext
+from annie.npc.core.response import AgentResponse
 from annie.npc.tools.base_tool import ToolContext
 from annie.town import (
     ScheduleSegment,
@@ -53,7 +53,7 @@ class ToolDrivingAgent:
         tool_context = ToolContext(agent_context=context, runtime={})
 
         if location == target:
-            _tool(context, "finish_schedule_segment").safe_call(
+            _tool(context, "complete_current_schedule").safe_call(
                 {"note": "已到达 LLM 计划中的目标地点"},
                 tool_context,
             )

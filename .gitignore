@@ -58,5 +58,11 @@ tsconfig.tsbuildinfo
 !.codex/skills/
 !.codex/skills/**
 
+# Runtime output (generated files, can be large)
+runs/
+
+# Codex cleanup artifacts
+.codex/cleanup/
+
 # External reference implementation copied locally
 GenerativeAgentsCN/

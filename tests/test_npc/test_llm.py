@@ -4,8 +4,8 @@ import os
 
 import pytest
 
-from annie.npc.config import load_model_config
-from annie.npc.llm import create_chat_model, create_embeddings
+from annie.npc.model.config import load_model_config
+from annie.npc.model.llm import create_chat_model, create_embeddings
 
 
 @pytest.fixture

@@ -2,7 +2,7 @@
 
 import pytest
 
-from annie.npc.state import (
+from annie.npc.core.state import (
     AgentState,
     Task,
     TaskStatus,

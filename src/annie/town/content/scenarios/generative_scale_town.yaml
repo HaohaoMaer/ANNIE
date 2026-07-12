@@ -1,0 +1,849 @@
+schema_version: 1
+id: generative_scale_town
+name: Harbor District Scale Town
+clock:
+  day: 1
+  minute: 480
+  stride_minutes: 10
+locations:
+  - id: town_square
+    name: Town Square
+    description: The central plaza where notices, errands, and casual meetings converge.
+    exits:
+      - {to: home_ada, travel_minutes: 5}
+      - {to: home_ben, travel_minutes: 5}
+      - {to: home_cara, travel_minutes: 5}
+      - {to: home_dan, travel_minutes: 5}
+      - {to: home_elena, travel_minutes: 5}
+      - {to: home_finn, travel_minutes: 5}
+      - {to: home_grace, travel_minutes: 5}
+      - {to: home_hugo, travel_minutes: 5}
+      - {to: home_iris, travel_minutes: 5}
+      - {to: home_jules, travel_minutes: 5}
+      - {to: home_kai, travel_minutes: 5}
+      - {to: home_lina, travel_minutes: 5}
+      - {to: home_marco, travel_minutes: 5}
+      - {to: home_nora, travel_minutes: 5}
+      - {to: home_owen, travel_minutes: 5}
+      - {to: home_priya, travel_minutes: 5}
+      - {to: home_quinn, travel_minutes: 5}
+      - {to: home_rosa, travel_minutes: 5}
+      - {to: home_sam, travel_minutes: 5}
+      - {to: home_tara, travel_minutes: 5}
+      - {to: home_uma, travel_minutes: 5}
+      - {to: home_victor, travel_minutes: 5}
+      - {to: home_wren, travel_minutes: 5}
+      - {to: home_xiao, travel_minutes: 5}
+      - {to: home_yara, travel_minutes: 5}
+      - {to: riverside_cafe, travel_minutes: 3}
+      - {to: green_market, travel_minutes: 4}
+      - {to: public_library, travel_minutes: 4}
+      - {to: clinic, travel_minutes: 5}
+      - {to: repair_workshop, travel_minutes: 6}
+      - {to: town_hall, travel_minutes: 3}
+      - {to: school, travel_minutes: 6}
+      - {to: art_studio, travel_minutes: 5}
+      - {to: community_garden, travel_minutes: 5}
+      - {to: riverside_park, travel_minutes: 6}
+      - {to: bakery, travel_minutes: 3}
+      - {to: grocery, travel_minutes: 4}
+      - {to: train_platform, travel_minutes: 7}
+      - {to: festival_green, travel_minutes: 5}
+      - {to: newspaper_office, travel_minutes: 4}
+      - {to: makers_hall, travel_minutes: 6}
+      - {to: daycare, travel_minutes: 6}
+      - {to: temple, travel_minutes: 5}
+      - {to: sports_court, travel_minutes: 6}
+      - {to: pharmacy, travel_minutes: 4}
+      - {to: fire_station, travel_minutes: 5}
+      - {to: bookshop, travel_minutes: 4}
+      - {to: music_room, travel_minutes: 5}
+      - {to: postal_office, travel_minutes: 4}
+    affordances:
+      - id: meet
+        label: Meet residents
+        description: Pause in the plaza and exchange local news.
+        aliases: [meet, gather, wait]
+    objects:
+      - id: town_notice_board
+        name: Notice board
+        description: A large board with civic updates, market lists, and event flyers.
+        affordances:
+          - id: read_notices
+            label: Read notices
+            description: Review town announcements.
+            aliases: [read notices, check board]
+            event_type: notice
+  - id: riverside_cafe
+    name: Riverside Cafe
+    description: A breakfast and afternoon gathering place beside the canal.
+    exits: [{to: town_square, travel_minutes: 3}]
+    affordances: [{id: sit, label: Sit for coffee, description: "Take a table and talk with nearby residents.", aliases: [coffee, sit]}]
+    objects:
+      - id: cafe_counter_scale
+        name: Cafe counter
+        description: Counter for ordering coffee and pastries.
+        affordances:
+          - {id: order_coffee, label: Order coffee, description: "Buy coffee or serve a customer.", aliases: [order, serve coffee]}
+          - {id: deliver_pastries, label: Deliver pastries, description: "Place a pastry delivery at the cafe counter.", aliases: [deliver pastries, place pastries, bring pastries, set down delivery, place_delivery], event_type: delivery}
+          - {id: place_delivery, label: Place delivery, description: "Set down a prepared delivery for cafe staff.", aliases: [deliver pastries, place pastries, bring pastries, set down delivery], event_type: delivery}
+  - id: green_market
+    name: Green Market
+    description: A covered market for produce, flowers, and daily supplies.
+    exits: [{to: town_square, travel_minutes: 4}]
+    affordances: [{id: shop, label: Shop, description: "Buy or sell market goods.", aliases: [shop, browse]}]
+    objects:
+      - id: market_stall_scale
+        name: Produce stall
+        description: Crates of vegetables with a shared price slate.
+        affordances:
+          - {id: buy_produce, label: Buy produce, description: "Purchase fruit or vegetables.", aliases: [buy produce, restock]}
+          - {id: prepare_stall, label: Prepare stall, description: "Set up crates and signs for running the produce stall.", aliases: [run produce stall, prepare stall, open stall, set up stall], event_type: work}
+          - {id: check_inventory, label: Check inventory, description: "Review produce stock and restock needs.", aliases: [inventory, check stock, restock, produce inventory], event_type: work}
+          - {id: update_price_board, label: Update price board, description: "Update the produce price slate.", aliases: [price board, update prices, price slate], event_type: work}
+  - id: public_library
+    name: Public Library
+    description: A civic reading room and archive.
+    exits: [{to: town_square, travel_minutes: 4}]
+    affordances: [{id: study, label: Study, description: "Read, research, or tutor quietly.", aliases: [study, read]}]
+    objects:
+      - id: archive_table_scale
+        name: Archive table
+        description: A table covered with maps, notices, and local history binders.
+        affordances: [{id: review_archive, label: Review archive, description: "Look up town records.", aliases: [archive, research]}]
+  - id: clinic
+    name: Clinic
+    description: The neighborhood clinic and wellness office.
+    exits: [{to: town_square, travel_minutes: 5}]
+    affordances: [{id: consult, label: Consult, description: "Ask for health advice or help a patient.", aliases: [consult, checkup]}]
+    objects:
+      - id: clinic_desk_scale
+        name: Clinic desk
+        description: Intake desk with appointment cards and supply forms.
+        affordances: [{id: check_patient, label: Check patient, description: "Handle intake or medical supplies.", aliases: [intake, supplies]}]
+  - id: repair_workshop
+    name: Repair Workshop
+    description: A workshop for bicycle, appliance, and carpentry repairs.
+    exits: [{to: town_square, travel_minutes: 6}]
+    affordances: [{id: repair, label: Repair items, description: "Work with hand tools on a repair task.", aliases: [repair, fix]}]
+    objects:
+      - id: repair_bench_scale
+        name: Repair bench
+        description: A sturdy bench with common tools.
+        affordances: [{id: use_tools, label: Use tools, description: "Fix or inspect a broken item.", aliases: [tools, inspect]}]
+  - id: town_hall
+    name: Town Hall
+    description: Civic office for permits, planning, and council meetings.
+    exits: [{to: town_square, travel_minutes: 3}]
+    affordances: [{id: file_request, label: File request, description: "Submit or review civic paperwork.", aliases: [paperwork, permit]}]
+    objects:
+      - id: civic_counter_scale
+        name: Civic counter
+        description: Counter with permit forms and meeting notes.
+        affordances: [{id: review_forms, label: Review forms, description: "Process a request or council note.", aliases: [forms, council]}]
+  - id: school
+    name: School
+    description: Classrooms for children, adult workshops, and evening clubs.
+    exits: [{to: town_square, travel_minutes: 6}]
+    affordances: [{id: teach, label: Teach or study, description: "Run a class or attend one.", aliases: [teach, learn]}]
+    objects:
+      - id: classroom_board_scale
+        name: Classroom board
+        description: A board with lesson notes and club schedules.
+        affordances: [{id: update_lesson, label: Update lesson, description: "Write or review a lesson plan.", aliases: [lesson, board, prepare lesson, inspect schedule, review lesson]}]
+  - id: art_studio
+    name: Art Studio
+    description: Shared studio for pottery, sketches, and sign painting.
+    exits: [{to: town_square, travel_minutes: 5}]
+    affordances: [{id: create_art, label: Create art, description: "Work on a shared creative project.", aliases: [paint, sketch]}]
+    objects:
+      - id: easel_wall_scale
+        name: Easel wall
+        description: Easels with community mural drafts.
+        affordances: [{id: paint_panel, label: Paint panel, description: "Add details to a mural panel.", aliases: [paint, mural, review drafts, inspect mural, prepare art]}]
+  - id: community_garden
+    name: Community Garden
+    description: Raised beds, seed boxes, and a shared tool shed.
+    exits: [{to: town_square, travel_minutes: 5}]
+    affordances: [{id: garden, label: Garden, description: "Tend plants or talk near the beds.", aliases: [garden, water]}]
+    objects:
+      - id: seed_box_scale
+        name: Seed box
+        description: Labeled seed packets and a watering ledger.
+        affordances: [{id: sort_seeds, label: Sort seeds, description: "Prepare seeds or update garden notes.", aliases: [seeds, water, update seed ledger, seed ledger, prepare seeds, inspect seeds]}]
+  - id: riverside_park
+    name: Riverside Park
+    description: A walking loop with benches and river views.
+    exits: [{to: town_square, travel_minutes: 6}]
+    affordances: [{id: stroll, label: Stroll, description: "Walk, rest, or meet by the water.", aliases: [walk, rest]}]
+    objects:
+      - id: park_bench_scale
+        name: Park bench
+        description: A bench often used for quiet talks.
+        affordances: [{id: sit_bench, label: Sit on bench, description: "Sit and reflect or chat.", aliases: [bench, talk]}]
+  - id: bakery
+    name: Bakery
+    description: A warm storefront that supplies breakfast bread and event cakes.
+    exits: [{to: town_square, travel_minutes: 3}]
+    affordances: [{id: bake, label: Bake or buy bread, description: "Work in or shop at the bakery.", aliases: [bake, bread]}]
+    objects:
+      - id: bakery_case_scale
+        name: Bakery case
+        description: Glass case with buns and loaves.
+        affordances: [{id: stock_bread, label: Stock bread, description: "Stock or buy baked goods.", aliases: [stock, buy bread]}]
+  - id: grocery
+    name: Grocery
+    description: A small grocery store with household staples.
+    exits: [{to: town_square, travel_minutes: 4}]
+    affordances: [{id: stock_shelves, label: Stock shelves, description: "Shop or restock daily goods.", aliases: [stock, shop]}]
+    objects:
+      - id: grocery_shelf_scale
+        name: Grocery shelf
+        description: Shelves of staples and order slips.
+        affordances: [{id: check_inventory, label: Check inventory, description: "Review grocery inventory.", aliases: [inventory, shelves]}]
+  - id: train_platform
+    name: Train Platform
+    description: A small platform connecting the district with nearby towns.
+    exits: [{to: town_square, travel_minutes: 7}]
+    affordances: [{id: wait_train, label: Wait for train, description: "Check arrivals or greet travelers.", aliases: [train, wait]}]
+    objects:
+      - id: arrival_board_scale
+        name: Arrival board
+        description: Board with handwritten arrival times.
+        affordances: [{id: check_arrivals, label: Check arrivals, description: "Review arrival updates.", aliases: [arrivals, board]}]
+  - id: festival_green
+    name: Festival Green
+    description: An open lawn used for rehearsals, markets, and town celebrations.
+    exits: [{to: town_square, travel_minutes: 5}]
+    affordances: [{id: prepare_event, label: Prepare event, description: "Arrange a civic or social event.", aliases: [event, festival]}]
+    objects:
+      - id: event_stage_scale
+        name: Event stage
+        description: A low platform with folded chairs nearby.
+        affordances: [{id: arrange_stage, label: Arrange stage, description: "Prepare seating or stage notes.", aliases: [stage, chairs, prepare event, arrange event, inspect stage]}]
+  - id: newspaper_office
+    name: Newspaper Office
+    description: Office for local reporting and printed bulletins.
+    exits: [{to: town_square, travel_minutes: 4}]
+    affordances: [{id: report_news, label: Report news, description: "Draft or edit local news.", aliases: [write, report]}]
+    objects:
+      - id: editor_desk_scale
+        name: Editor desk
+        description: Desk with drafts and public notices.
+        affordances: [{id: edit_story, label: Edit story, description: "Edit a local article.", aliases: [edit, story, review notices, file notes, prepare bulletin]}]
+  - id: makers_hall
+    name: Makers Hall
+    description: Shared equipment room for sewing, repairs, and prototypes.
+    exits: [{to: town_square, travel_minutes: 6}]
+    affordances: [{id: make_project, label: Make project, description: "Use shared equipment on a project.", aliases: [make, prototype]}]
+    objects:
+      - id: sewing_table_scale
+        name: Sewing table
+        description: Table with fabric, sketches, and repair slips.
+        affordances: [{id: sew_repair, label: Sew repair, description: "Repair cloth or prototype a sign.", aliases: [sew, repair]}]
+  - id: daycare
+    name: Daycare
+    description: Childcare room with story mats and activity shelves.
+    exits: [{to: town_square, travel_minutes: 6}]
+    affordances: [{id: care, label: Care for children, description: "Help with childcare or pickup.", aliases: [care, pickup]}]
+    objects:
+      - id: activity_shelf_scale
+        name: Activity shelf
+        description: Shelf of puzzles, crayons, and pickup cards.
+        affordances: [{id: set_activity, label: Set activity, description: "Prepare a child activity.", aliases: [activity, puzzle]}]
+  - id: temple
+    name: Quiet Temple
+    description: A small reflection space used for memorials and quiet meetings.
+    exits: [{to: town_square, travel_minutes: 5}]
+    affordances: [{id: reflect, label: Reflect, description: "Sit quietly or offer support.", aliases: [reflect, pray]}]
+    objects:
+      - id: candle_table_scale
+        name: Candle table
+        description: Table with candles and community remembrance cards.
+        affordances: [{id: light_candle, label: Light candle, description: "Light or arrange candles.", aliases: [candle, memorial]}]
+  - id: sports_court
+    name: Sports Court
+    description: A public court used for exercise and student games.
+    exits: [{to: town_square, travel_minutes: 6}]
+    affordances: [{id: exercise, label: Exercise, description: "Practice or coach a game.", aliases: [exercise, coach]}]
+    objects:
+      - id: ball_cart_scale
+        name: Ball cart
+        description: Cart of balls and training cones.
+        affordances: [{id: set_drill, label: Set drill, description: "Prepare a sports drill.", aliases: [drill, cones]}]
+  - id: pharmacy
+    name: Pharmacy
+    description: A small pharmacy linked to the clinic.
+    exits: [{to: town_square, travel_minutes: 4}]
+    affordances: [{id: fill_order, label: Fill order, description: "Prepare or collect medicine.", aliases: [medicine, fill]}]
+    objects:
+      - id: prescription_box_scale
+        name: Prescription box
+        description: A locked box for prescriptions and pickup notes.
+        affordances: [{id: review_prescription, label: Review prescription, description: "Check a prescription note.", aliases: [prescription, pickup]}]
+  - id: fire_station
+    name: Fire Station
+    description: Emergency response station and safety classroom.
+    exits: [{to: town_square, travel_minutes: 5}]
+    affordances: [{id: safety_check, label: Safety check, description: "Prepare equipment or safety lessons.", aliases: [safety, equipment]}]
+    objects:
+      - id: equipment_rack_scale
+        name: Equipment rack
+        description: Rack of radios, helmets, and safety checklists.
+        affordances: [{id: inspect_equipment, label: Inspect equipment, description: "Check emergency gear.", aliases: [gear, inspect, inspect emergency equipment, emergency equipment, safety checklist, log equipment]}]
+  - id: bookshop
+    name: Bookshop
+    description: A small shop for novels, stationery, and reading club notes.
+    exits: [{to: town_square, travel_minutes: 4}]
+    affordances: [{id: browse_books, label: Browse books, description: "Browse or recommend books.", aliases: [browse, recommend]}]
+    objects:
+      - id: recommendation_shelf_scale
+        name: Recommendation shelf
+        description: Shelf with staff notes and book club picks.
+        affordances: [{id: update_picks, label: Update picks, description: "Add a recommendation card.", aliases: [picks, cards]}]
+  - id: music_room
+    name: Music Room
+    description: Rehearsal room for choir, students, and festival performers.
+    exits: [{to: town_square, travel_minutes: 5}]
+    affordances: [{id: rehearse, label: Rehearse, description: "Practice music or coach performers.", aliases: [rehearse, music]}]
+    objects:
+      - id: piano_scale
+        name: Upright piano
+        description: A tuned piano with rehearsal sheets.
+        affordances: [{id: practice_song, label: Practice song, description: "Practice a song or arrange sheets.", aliases: [song, piano]}]
+  - id: postal_office
+    name: Postal Office
+    description: Mail counter and parcel sorting room.
+    exits: [{to: town_square, travel_minutes: 4}]
+    affordances: [{id: sort_mail, label: Sort mail, description: "Send, sort, or collect letters.", aliases: [mail, parcel]}]
+    objects:
+      - id: parcel_counter_scale
+        name: Parcel counter
+        description: Counter with parcels and delivery notes.
+        affordances: [{id: process_parcel, label: Process parcel, description: "Process mail or parcel pickup.", aliases: [parcel, pickup, update route, delivery route, sort parcel, process delivery]}]
+  - id: home_ada
+    name: Ada's Home
+    description: A tidy upstairs room above a side street.
+    exits: [{to: town_square, travel_minutes: 5}]
+    affordances: [{id: rest, label: Rest, description: "Rest at home.", aliases: [rest, Rest, home, sleep, rest at home]}]
+    objects: [{id: home_ada_table, name: Kitchen table, description: A small table for breakfast and notes., affordances: [{id: breakfast, label: Breakfast, description: "Eat breakfast or review plans.", aliases: [breakfast, plan]}, {id: review_notes, label: Review notes, description: "Review home notes and reflections.", aliases: [review notes, inspect notes, write reflections, update notes]}, {id: file_notes, label: File notes, description: "File notes, checklists, messages, ledgers, or route updates.", aliases: [file notes, rest and file notes, update checklist, message families, sort sheet music, update route, write shelf cards, update seed ledger]}, {id: plan_day, label: Plan day, description: "Plan or study the day at home.", aliases: [plan day, study, prepare day, restock notes]}]}]
+  - id: home_ben
+    name: Ben's Home
+    description: A compact apartment near the market lane.
+    exits: [{to: town_square, travel_minutes: 5}]
+    affordances: [{id: rest, label: Rest, description: "Rest at home.", aliases: [rest, Rest, home, sleep, rest at home]}]
+    objects: [{id: home_ben_table, name: Kitchen table, description: A small table for breakfast and notes., affordances: [{id: breakfast, label: Breakfast, description: "Eat breakfast or review plans.", aliases: [breakfast, plan]}, {id: review_notes, label: Review notes, description: "Review home notes and reflections.", aliases: [review notes, inspect notes, write reflections, update notes]}, {id: file_notes, label: File notes, description: "File notes, checklists, messages, ledgers, or route updates.", aliases: [file notes, rest and file notes, update checklist, message families, sort sheet music, update route, write shelf cards, update seed ledger]}, {id: plan_day, label: Plan day, description: "Plan or study the day at home.", aliases: [plan day, study, prepare day, restock notes]}]}]
+  - id: home_cara
+    name: Cara's Home
+    description: A bright flat with books near the square.
+    exits: [{to: town_square, travel_minutes: 5}]
+    affordances: [{id: rest, label: Rest, description: "Rest at home.", aliases: [rest, Rest, home, sleep, rest at home]}]
+    objects: [{id: home_cara_table, name: Kitchen table, description: A small table for breakfast and notes., affordances: [{id: breakfast, label: Breakfast, description: "Eat breakfast or review plans.", aliases: [breakfast, plan]}, {id: review_notes, label: Review notes, description: "Review home notes and reflections.", aliases: [review notes, inspect notes, write reflections, update notes]}, {id: file_notes, label: File notes, description: "File notes, checklists, messages, ledgers, or route updates.", aliases: [file notes, rest and file notes, update checklist, message families, sort sheet music, update route, write shelf cards, update seed ledger]}, {id: plan_day, label: Plan day, description: "Plan or study the day at home.", aliases: [plan day, study, prepare day, restock notes]}]}]
+  - id: home_dan
+    name: Dan's Home
+    description: A ground-floor room with repair manuals by the door.
+    exits: [{to: town_square, travel_minutes: 5}]
+    affordances: [{id: rest, label: Rest, description: "Rest at home.", aliases: [rest, Rest, home, sleep, rest at home]}]
+    objects: [{id: home_dan_table, name: Kitchen table, description: A small table for breakfast and notes., affordances: [{id: breakfast, label: Breakfast, description: "Eat breakfast or review plans.", aliases: [breakfast, plan]}, {id: review_notes, label: Review notes, description: "Review home notes and reflections.", aliases: [review notes, inspect notes, write reflections, update notes]}, {id: file_notes, label: File notes, description: "File notes, checklists, messages, ledgers, or route updates.", aliases: [file notes, rest and file notes, update checklist, message families, sort sheet music, update route, write shelf cards, update seed ledger]}, {id: plan_day, label: Plan day, description: "Plan or study the day at home.", aliases: [plan day, study, prepare day, restock notes]}]}]
+  - id: home_elena
+    name: Elena's Home
+    description: A quiet home with clinic notes on the desk.
+    exits: [{to: town_square, travel_minutes: 5}]
+    affordances: [{id: rest, label: Rest, description: "Rest at home.", aliases: [rest, Rest, home, sleep, rest at home]}]
+    objects: [{id: home_elena_table, name: Kitchen table, description: A small table for breakfast and notes., affordances: [{id: breakfast, label: Breakfast, description: "Eat breakfast or review plans.", aliases: [breakfast, plan]}, {id: review_notes, label: Review notes, description: "Review home notes and reflections.", aliases: [review notes, inspect notes, write reflections, update notes]}, {id: file_notes, label: File notes, description: "File notes, checklists, messages, ledgers, or route updates.", aliases: [file notes, rest and file notes, update checklist, message families, sort sheet music, update route, write shelf cards, update seed ledger]}, {id: plan_day, label: Plan day, description: "Plan or study the day at home.", aliases: [plan day, study, prepare day, restock notes]}]}]
+  - id: home_finn
+    name: Finn's Home
+    description: A narrow house with lesson folders stacked by the window.
+    exits: [{to: town_square, travel_minutes: 5}]
+    affordances: [{id: rest, label: Rest, description: "Rest at home.", aliases: [rest, Rest, home, sleep, rest at home]}]
+    objects: [{id: home_finn_table, name: Kitchen table, description: A small table for breakfast and notes., affordances: [{id: breakfast, label: Breakfast, description: "Eat breakfast or review plans.", aliases: [breakfast, plan]}, {id: review_notes, label: Review notes, description: "Review home notes and reflections.", aliases: [review notes, inspect notes, write reflections, update notes]}, {id: file_notes, label: File notes, description: "File notes, checklists, messages, ledgers, or route updates.", aliases: [file notes, rest and file notes, update checklist, message families, sort sheet music, update route, write shelf cards, update seed ledger]}, {id: plan_day, label: Plan day, description: "Plan or study the day at home.", aliases: [plan day, study, prepare day, restock notes]}]}]
+  - id: home_grace
+    name: Grace's Home
+    description: A small place filled with sketch paper and clay tools.
+    exits: [{to: town_square, travel_minutes: 5}]
+    affordances: [{id: rest, label: Rest, description: "Rest at home.", aliases: [rest, Rest, home, sleep, rest at home]}]
+    objects: [{id: home_grace_table, name: Kitchen table, description: A small table for breakfast and notes., affordances: [{id: breakfast, label: Breakfast, description: "Eat breakfast or review plans.", aliases: [breakfast, plan]}, {id: review_notes, label: Review notes, description: "Review home notes and reflections.", aliases: [review notes, inspect notes, write reflections, update notes]}, {id: file_notes, label: File notes, description: "File notes, checklists, messages, ledgers, or route updates.", aliases: [file notes, rest and file notes, update checklist, message families, sort sheet music, update route, write shelf cards, update seed ledger]}, {id: plan_day, label: Plan day, description: "Plan or study the day at home.", aliases: [plan day, study, prepare day, restock notes]}]}]
+  - id: home_hugo
+    name: Hugo's Home
+    description: A house with garden gloves by the sink.
+    exits: [{to: town_square, travel_minutes: 5}]
+    affordances: [{id: rest, label: Rest, description: "Rest at home.", aliases: [rest, Rest, home, sleep, rest at home]}]
+    objects: [{id: home_hugo_table, name: Kitchen table, description: A small table for breakfast and notes., affordances: [{id: breakfast, label: Breakfast, description: "Eat breakfast or review plans.", aliases: [breakfast, plan]}, {id: review_notes, label: Review notes, description: "Review home notes and reflections.", aliases: [review notes, inspect notes, write reflections, update notes]}, {id: file_notes, label: File notes, description: "File notes, checklists, messages, ledgers, or route updates.", aliases: [file notes, rest and file notes, update checklist, message families, sort sheet music, update route, write shelf cards, update seed ledger]}, {id: plan_day, label: Plan day, description: "Plan or study the day at home.", aliases: [plan day, study, prepare day, restock notes]}]}]
+  - id: home_iris
+    name: Iris's Home
+    description: A calm room near the riverside path.
+    exits: [{to: town_square, travel_minutes: 5}]
+    affordances: [{id: rest, label: Rest, description: "Rest at home.", aliases: [rest, Rest, home, sleep, rest at home]}]
+    objects: [{id: home_iris_table, name: Kitchen table, description: A small table for breakfast and notes., affordances: [{id: breakfast, label: Breakfast, description: "Eat breakfast or review plans.", aliases: [breakfast, plan]}, {id: review_notes, label: Review notes, description: "Review home notes and reflections.", aliases: [review notes, inspect notes, write reflections, update notes]}, {id: file_notes, label: File notes, description: "File notes, checklists, messages, ledgers, or route updates.", aliases: [file notes, rest and file notes, update checklist, message families, sort sheet music, update route, write shelf cards, update seed ledger]}, {id: plan_day, label: Plan day, description: "Plan or study the day at home.", aliases: [plan day, study, prepare day, restock notes]}]}]
+  - id: home_jules
+    name: Jules's Home
+    description: A home with bread baskets ready for early delivery.
+    exits: [{to: town_square, travel_minutes: 5}]
+    affordances: [{id: rest, label: Rest, description: "Rest at home.", aliases: [rest, Rest, home, sleep, rest at home]}]
+    objects: [{id: home_jules_table, name: Kitchen table, description: A small table for breakfast and notes., affordances: [{id: breakfast, label: Breakfast, description: "Eat breakfast or review plans.", aliases: [breakfast, plan]}, {id: review_notes, label: Review notes, description: "Review home notes and reflections.", aliases: [review notes, inspect notes, write reflections, update notes]}, {id: file_notes, label: File notes, description: "File notes, checklists, messages, ledgers, or route updates.", aliases: [file notes, rest and file notes, update checklist, message families, sort sheet music, update route, write shelf cards, update seed ledger]}, {id: plan_day, label: Plan day, description: "Plan or study the day at home.", aliases: [plan day, study, prepare day, restock notes]}]}]
+  - id: home_kai
+    name: Kai's Home
+    description: A room with grocery ledgers beside the door.
+    exits: [{to: town_square, travel_minutes: 5}]
+    affordances: [{id: rest, label: Rest, description: "Rest at home.", aliases: [rest, Rest, home, sleep, rest at home]}]
+    objects: [{id: home_kai_table, name: Kitchen table, description: A small table for breakfast and notes., affordances: [{id: breakfast, label: Breakfast, description: "Eat breakfast or review plans.", aliases: [breakfast, plan]}, {id: review_notes, label: Review notes, description: "Review home notes and reflections.", aliases: [review notes, inspect notes, write reflections, update notes]}, {id: file_notes, label: File notes, description: "File notes, checklists, messages, ledgers, or route updates.", aliases: [file notes, rest and file notes, update checklist, message families, sort sheet music, update route, write shelf cards, update seed ledger]}, {id: plan_day, label: Plan day, description: "Plan or study the day at home.", aliases: [plan day, study, prepare day, restock notes]}]}]
+  - id: home_lina
+    name: Lina's Home
+    description: A sunny home facing the train path.
+    exits: [{to: town_square, travel_minutes: 5}]
+    affordances: [{id: rest, label: Rest, description: "Rest at home.", aliases: [rest, Rest, home, sleep, rest at home]}]
+    objects: [{id: home_lina_table, name: Kitchen table, description: A small table for breakfast and notes., affordances: [{id: breakfast, label: Breakfast, description: "Eat breakfast or review plans.", aliases: [breakfast, plan]}, {id: review_notes, label: Review notes, description: "Review home notes and reflections.", aliases: [review notes, inspect notes, write reflections, update notes]}, {id: file_notes, label: File notes, description: "File notes, checklists, messages, ledgers, or route updates.", aliases: [file notes, rest and file notes, update checklist, message families, sort sheet music, update route, write shelf cards, update seed ledger]}, {id: plan_day, label: Plan day, description: "Plan or study the day at home.", aliases: [plan day, study, prepare day, restock notes]}]}]
+  - id: home_marco
+    name: Marco's Home
+    description: A house with folded event banners in the entry.
+    exits: [{to: town_square, travel_minutes: 5}]
+    affordances: [{id: rest, label: Rest, description: "Rest at home.", aliases: [rest, Rest, home, sleep, rest at home]}]
+    objects: [{id: home_marco_table, name: Kitchen table, description: A small table for breakfast and notes., affordances: [{id: breakfast, label: Breakfast, description: "Eat breakfast or review plans.", aliases: [breakfast, plan]}, {id: review_notes, label: Review notes, description: "Review home notes and reflections.", aliases: [review notes, inspect notes, write reflections, update notes]}, {id: file_notes, label: File notes, description: "File notes, checklists, messages, ledgers, or route updates.", aliases: [file notes, rest and file notes, update checklist, message families, sort sheet music, update route, write shelf cards, update seed ledger]}, {id: plan_day, label: Plan day, description: "Plan or study the day at home.", aliases: [plan day, study, prepare day, restock notes]}]}]
+  - id: home_nora
+    name: Nora's Home
+    description: A reporter's apartment with notes pinned above the desk.
+    exits: [{to: town_square, travel_minutes: 5}]
+    affordances: [{id: rest, label: Rest, description: "Rest at home.", aliases: [rest, Rest, home, sleep, rest at home]}]
+    objects: [{id: home_nora_table, name: Kitchen table, description: A small table for breakfast and notes., affordances: [{id: breakfast, label: Breakfast, description: "Eat breakfast or review plans.", aliases: [breakfast, plan]}, {id: review_notes, label: Review notes, description: "Review home notes and reflections.", aliases: [review notes, inspect notes, write reflections, update notes]}, {id: file_notes, label: File notes, description: "File notes, checklists, messages, ledgers, or route updates.", aliases: [file notes, rest and file notes, update checklist, message families, sort sheet music, update route, write shelf cards, update seed ledger]}, {id: plan_day, label: Plan day, description: "Plan or study the day at home.", aliases: [plan day, study, prepare day, restock notes]}]}]
+  - id: home_owen
+    name: Owen's Home
+    description: A maker's home with measuring tape on the shelf.
+    exits: [{to: town_square, travel_minutes: 5}]
+    affordances: [{id: rest, label: Rest, description: "Rest at home.", aliases: [rest, Rest, home, sleep, rest at home]}]
+    objects: [{id: home_owen_table, name: Kitchen table, description: A small table for breakfast and notes., affordances: [{id: breakfast, label: Breakfast, description: "Eat breakfast or review plans.", aliases: [breakfast, plan]}, {id: review_notes, label: Review notes, description: "Review home notes and reflections.", aliases: [review notes, inspect notes, write reflections, update notes]}, {id: file_notes, label: File notes, description: "File notes, checklists, messages, ledgers, or route updates.", aliases: [file notes, rest and file notes, update checklist, message families, sort sheet music, update route, write shelf cards, update seed ledger]}, {id: plan_day, label: Plan day, description: "Plan or study the day at home.", aliases: [plan day, study, prepare day, restock notes]}]}]
+  - id: home_priya
+    name: Priya's Home
+    description: A welcoming home with children's drawings on the wall.
+    exits: [{to: town_square, travel_minutes: 5}]
+    affordances: [{id: rest, label: Rest, description: "Rest at home.", aliases: [rest, Rest, home, sleep, rest at home]}]
+    objects: [{id: home_priya_table, name: Kitchen table, description: A small table for breakfast and notes., affordances: [{id: breakfast, label: Breakfast, description: "Eat breakfast or review plans.", aliases: [breakfast, plan]}, {id: review_notes, label: Review notes, description: "Review home notes and reflections.", aliases: [review notes, inspect notes, write reflections, update notes]}, {id: file_notes, label: File notes, description: "File notes, checklists, messages, ledgers, or route updates.", aliases: [file notes, rest and file notes, update checklist, message families, sort sheet music, update route, write shelf cards, update seed ledger]}, {id: plan_day, label: Plan day, description: "Plan or study the day at home.", aliases: [plan day, study, prepare day, restock notes]}]}]
+  - id: home_quinn
+    name: Quinn's Home
+    description: A quiet home with candles and folded programs.
+    exits: [{to: town_square, travel_minutes: 5}]
+    affordances: [{id: rest, label: Rest, description: "Rest at home.", aliases: [rest, Rest, home, sleep, rest at home]}]
+    objects: [{id: home_quinn_table, name: Kitchen table, description: A small table for breakfast and notes., affordances: [{id: breakfast, label: Breakfast, description: "Eat breakfast or review plans.", aliases: [breakfast, plan]}, {id: review_notes, label: Review notes, description: "Review home notes and reflections.", aliases: [review notes, inspect notes, write reflections, update notes]}, {id: file_notes, label: File notes, description: "File notes, checklists, messages, ledgers, or route updates.", aliases: [file notes, rest and file notes, update checklist, message families, sort sheet music, update route, write shelf cards, update seed ledger]}, {id: plan_day, label: Plan day, description: "Plan or study the day at home.", aliases: [plan day, study, prepare day, restock notes]}]}]
+  - id: home_rosa
+    name: Rosa's Home
+    description: A coach's house with whistles and schedules by the door.
+    exits: [{to: town_square, travel_minutes: 5}]
+    affordances: [{id: rest, label: Rest, description: "Rest at home.", aliases: [rest, Rest, home, sleep, rest at home]}]
+    objects: [{id: home_rosa_table, name: Kitchen table, description: A small table for breakfast and notes., affordances: [{id: breakfast, label: Breakfast, description: "Eat breakfast or review plans.", aliases: [breakfast, plan]}, {id: review_notes, label: Review notes, description: "Review home notes and reflections.", aliases: [review notes, inspect notes, write reflections, update notes]}, {id: file_notes, label: File notes, description: "File notes, checklists, messages, ledgers, or route updates.", aliases: [file notes, rest and file notes, update checklist, message families, sort sheet music, update route, write shelf cards, update seed ledger]}, {id: plan_day, label: Plan day, description: "Plan or study the day at home.", aliases: [plan day, study, prepare day, restock notes]}]}]
+  - id: home_sam
+    name: Sam's Home
+    description: A small home near the pharmacy lane.
+    exits: [{to: town_square, travel_minutes: 5}]
+    affordances: [{id: rest, label: Rest, description: "Rest at home.", aliases: [rest, Rest, home, sleep, rest at home]}]
+    objects: [{id: home_sam_table, name: Kitchen table, description: A small table for breakfast and notes., affordances: [{id: breakfast, label: Breakfast, description: "Eat breakfast or review plans.", aliases: [breakfast, plan]}, {id: review_notes, label: Review notes, description: "Review home notes and reflections.", aliases: [review notes, inspect notes, write reflections, update notes]}, {id: file_notes, label: File notes, description: "File notes, checklists, messages, ledgers, or route updates.", aliases: [file notes, rest and file notes, update checklist, message families, sort sheet music, update route, write shelf cards, update seed ledger]}, {id: plan_day, label: Plan day, description: "Plan or study the day at home.", aliases: [plan day, study, prepare day, restock notes]}]}]
+  - id: home_tara
+    name: Tara's Home
+    description: A firefighter's home with safety flyers by the entry.
+    exits: [{to: town_square, travel_minutes: 5}]
+    affordances: [{id: rest, label: Rest, description: "Rest at home.", aliases: [rest, Rest, home, sleep, rest at home]}]
+    objects: [{id: home_tara_table, name: Kitchen table, description: A small table for breakfast and notes., affordances: [{id: breakfast, label: Breakfast, description: "Eat breakfast or review plans.", aliases: [breakfast, plan]}, {id: review_notes, label: Review notes, description: "Review home notes and reflections.", aliases: [review notes, inspect notes, write reflections, update notes]}, {id: file_notes, label: File notes, description: "File notes, checklists, messages, ledgers, or route updates.", aliases: [file notes, rest and file notes, update checklist, message families, sort sheet music, update route, write shelf cards, update seed ledger]}, {id: plan_day, label: Plan day, description: "Plan or study the day at home.", aliases: [plan day, study, prepare day, restock notes]}]}]
+  - id: home_uma
+    name: Uma's Home
+    description: A bookish home with note cards on the table.
+    exits: [{to: town_square, travel_minutes: 5}]
+    affordances: [{id: rest, label: Rest, description: "Rest at home.", aliases: [rest, Rest, home, sleep, rest at home]}]
+    objects: [{id: home_uma_table, name: Kitchen table, description: A small table for breakfast and notes., affordances: [{id: breakfast, label: Breakfast, description: "Eat breakfast or review plans.", aliases: [breakfast, plan]}, {id: review_notes, label: Review notes, description: "Review home notes and reflections.", aliases: [review notes, inspect notes, write reflections, update notes]}, {id: file_notes, label: File notes, description: "File notes, checklists, messages, ledgers, or route updates.", aliases: [file notes, rest and file notes, update checklist, message families, sort sheet music, update route, write shelf cards, update seed ledger]}, {id: plan_day, label: Plan day, description: "Plan or study the day at home.", aliases: [plan day, study, prepare day, restock notes]}]}]
+  - id: home_victor
+    name: Victor's Home
+    description: A musician's room with stacked rehearsal sheets.
+    exits: [{to: town_square, travel_minutes: 5}]
+    affordances: [{id: rest, label: Rest, description: "Rest at home.", aliases: [rest, Rest, home, sleep, rest at home]}]
+    objects: [{id: home_victor_table, name: Kitchen table, description: A small table for breakfast and notes., affordances: [{id: breakfast, label: Breakfast, description: "Eat breakfast or review plans.", aliases: [breakfast, plan]}, {id: review_notes, label: Review notes, description: "Review home notes and reflections.", aliases: [review notes, inspect notes, write reflections, update notes]}, {id: file_notes, label: File notes, description: "File notes, checklists, messages, ledgers, or route updates.", aliases: [file notes, rest and file notes, update checklist, message families, sort sheet music, update route, write shelf cards, update seed ledger]}, {id: plan_day, label: Plan day, description: "Plan or study the day at home.", aliases: [plan day, study, prepare day, restock notes]}]}]
+  - id: home_wren
+    name: Wren's Home
+    description: A postal worker's flat with route cards near the kettle.
+    exits: [{to: town_square, travel_minutes: 5}]
+    affordances: [{id: rest, label: Rest, description: "Rest at home.", aliases: [rest, Rest, home, sleep, rest at home]}]
+    objects: [{id: home_wren_table, name: Kitchen table, description: A small table for breakfast and notes., affordances: [{id: breakfast, label: Breakfast, description: "Eat breakfast or review plans.", aliases: [breakfast, plan]}, {id: review_notes, label: Review notes, description: "Review home notes and reflections.", aliases: [review notes, inspect notes, write reflections, update notes]}, {id: file_notes, label: File notes, description: "File notes, checklists, messages, ledgers, or route updates.", aliases: [file notes, rest and file notes, update checklist, message families, sort sheet music, update route, write shelf cards, update seed ledger]}, {id: plan_day, label: Plan day, description: "Plan or study the day at home.", aliases: [plan day, study, prepare day, restock notes]}]}]
+  - id: home_xiao
+    name: Xiao's Home
+    description: A student's home with study cards beside breakfast.
+    exits: [{to: town_square, travel_minutes: 5}]
+    affordances: [{id: rest, label: Rest, description: "Rest at home.", aliases: [rest, Rest, home, sleep, rest at home]}]
+    objects: [{id: home_xiao_table, name: Kitchen table, description: A small table for breakfast and notes., affordances: [{id: breakfast, label: Breakfast, description: "Eat breakfast or review plans.", aliases: [breakfast, plan]}, {id: review_notes, label: Review notes, description: "Review home notes and reflections.", aliases: [review notes, inspect notes, write reflections, update notes]}, {id: file_notes, label: File notes, description: "File notes, checklists, messages, ledgers, or route updates.", aliases: [file notes, rest and file notes, update checklist, message families, sort sheet music, update route, write shelf cards, update seed ledger]}, {id: plan_day, label: Plan day, description: "Plan or study the day at home.", aliases: [plan day, study, prepare day, restock notes]}]}]
+  - id: home_yara
+    name: Yara's Home
+    description: A gardener's home with community seed lists by the window.
+    exits: [{to: town_square, travel_minutes: 5}]
+    affordances: [{id: rest, label: Rest, description: "Rest at home.", aliases: [rest, Rest, home, sleep, rest at home]}]
+    objects: [{id: home_yara_table, name: Kitchen table, description: A small table for breakfast and notes., affordances: [{id: breakfast, label: Breakfast, description: "Eat breakfast or review plans.", aliases: [breakfast, plan]}, {id: review_notes, label: Review notes, description: "Review home notes and reflections.", aliases: [review notes, inspect notes, write reflections, update notes]}, {id: file_notes, label: File notes, description: "File notes, checklists, messages, ledgers, or route updates.", aliases: [file notes, rest and file notes, update checklist, message families, sort sheet music, update route, write shelf cards, update seed ledger]}, {id: plan_day, label: Plan day, description: "Plan or study the day at home.", aliases: [plan day, study, prepare day, restock notes]}]}]
+residents:
+  - id: ada
+    name: Ada Park
+    starting_location: home_ada
+    home_location: home_ada
+    sleep_location: home_ada
+    default_wake_window: [420, 540]
+    default_sleep_window: [1320, 1430]
+    persona: {currently: "Opening the cafe and tracking morning gossip.", lifestyle: "Early riser who anchors breakfast routines.", background: "Cafe manager and informal connector.", traits: [observant, warm, practical]}
+    relationships: {ben: "Coordinates market pastry orders with Ben.", cara: "Saves quiet corner tables for Cara's reading group."}
+    schedule:
+      - {start_minute: 480, duration_minutes: 40, location: home_ada, intent: "Breakfast and review cafe notes"}
+      - {start_minute: 540, duration_minutes: 140, location: riverside_cafe, intent: "Open cafe service"}
+      - {start_minute: 720, duration_minutes: 60, location: town_square, intent: "Check public notices"}
+      - {start_minute: 840, duration_minutes: 60, location: home_ada, intent: "Rest before evening shift"}
+    memory_seeds: [{id: ada_thread, content: "Ada is preparing cafe seating for the festival planning crowd.", metadata: {thread: festival_planning}}]
+  - id: ben
+    name: Ben Ortiz
+    starting_location: home_ben
+    home_location: home_ben
+    sleep_location: home_ben
+    default_wake_window: [420, 540]
+    default_sleep_window: [1320, 1430]
+    persona: {currently: "Balancing produce orders and neighbors' requests.", lifestyle: "Market-focused and social.", background: "Runs the produce stall at Green Market.", traits: [energetic, direct, generous]}
+    relationships: {ada: "Supplies Ada with fruit for cafe breakfast plates.", hugo: "Trades compost and seed tips with Hugo."}
+    schedule:
+      - {start_minute: 480, duration_minutes: 40, location: home_ben, intent: "Breakfast and sort market ledger"}
+      - {start_minute: 540, duration_minutes: 140, location: green_market, intent: "Run produce stall", completion_tags: [prepare_stall, check_inventory, update_price_board, run produce stall]}
+      - {start_minute: 720, duration_minutes: 60, location: community_garden, intent: "Discuss garden harvest"}
+      - {start_minute: 840, duration_minutes: 60, location: home_ben, intent: "Restock notes at home"}
+    memory_seeds: [{id: ben_thread, content: "Ben and Hugo plan to share market leftovers with the community garden.", metadata: {thread: garden_market}}]
+  - id: cara
+    name: Cara Lin
+    starting_location: home_cara
+    home_location: home_cara
+    sleep_location: home_cara
+    default_wake_window: [420, 540]
+    default_sleep_window: [1320, 1430]
+    persona: {currently: "Preparing archive materials for a town history display.", lifestyle: "Quiet, structured, and civic-minded.", background: "Public librarian and reading group host.", traits: [patient, precise, curious]}
+    relationships: {ada: "Meets Ada for coffee before library programs.", uma: "Shares book recommendations with Uma."}
+    schedule:
+      - {start_minute: 480, duration_minutes: 40, location: home_cara, intent: "Breakfast and review archive plan"}
+      - {start_minute: 540, duration_minutes: 140, location: public_library, intent: "Open archive room"}
+      - {start_minute: 720, duration_minutes: 60, location: bookshop, intent: "Coordinate reading club picks"}
+      - {start_minute: 840, duration_minutes: 60, location: home_cara, intent: "Write catalog notes"}
+    memory_seeds: [{id: cara_thread, content: "Cara and Uma want the reading club to include festival oral histories.", metadata: {thread: reading_club}}]
+  - id: dan
+    name: Dan Cho
+    starting_location: home_dan
+    home_location: home_dan
+    sleep_location: home_dan
+    default_wake_window: [420, 540]
+    default_sleep_window: [1320, 1430]
+    persona: {currently: "Repairing borrowed tools before the festival setup.", lifestyle: "Hands-on, methodical, often helps neighbors.", background: "Repair workshop owner.", traits: [steady, inventive, helpful]}
+    relationships: {owen: "Builds event fixtures with Owen.", tara: "Maintains safety equipment for Tara's team."}
+    schedule:
+      - {start_minute: 480, duration_minutes: 40, location: home_dan, intent: "Breakfast and inspect repair list"}
+      - {start_minute: 540, duration_minutes: 140, location: repair_workshop, intent: "Fix community equipment"}
+      - {start_minute: 720, duration_minutes: 60, location: makers_hall, intent: "Help with fixture prototype"}
+      - {start_minute: 840, duration_minutes: 60, location: home_dan, intent: "Log completed repairs"}
+    memory_seeds: [{id: dan_thread, content: "Dan promised Tara a safety inspection before the festival green opens.", metadata: {thread: safety_setup}}]
+  - id: elena
+    name: Elena Ruiz
+    starting_location: home_elena
+    home_location: home_elena
+    sleep_location: home_elena
+    default_wake_window: [420, 540]
+    default_sleep_window: [1320, 1430]
+    persona: {currently: "Managing clinic checkups and medicine handoffs.", lifestyle: "Measured, attentive, service-oriented.", background: "Nurse practitioner at the clinic.", traits: [calm, careful, reassuring]}
+    relationships: {sam: "Coordinates pharmacy pickups with Sam.", quinn: "Checks on Quinn's elder care visits."}
+    schedule:
+      - {start_minute: 480, duration_minutes: 40, location: home_elena, intent: "Breakfast and review patient list"}
+      - {start_minute: 540, duration_minutes: 140, location: clinic, intent: "Run morning clinic"}
+      - {start_minute: 720, duration_minutes: 60, location: pharmacy, intent: "Confirm prescription handoffs"}
+      - {start_minute: 840, duration_minutes: 60, location: home_elena, intent: "Rest and update notes"}
+    memory_seeds: [{id: elena_thread, content: "Elena and Sam are tracking which residents need medicine before the festival.", metadata: {thread: care_network}}]
+  - id: finn
+    name: Finn Mercer
+    starting_location: home_finn
+    home_location: home_finn
+    sleep_location: home_finn
+    default_wake_window: [420, 540]
+    default_sleep_window: [1320, 1430]
+    persona: {currently: "Preparing lessons and student club materials.", lifestyle: "Organized teacher with a civic streak.", background: "School teacher.", traits: [thoughtful, encouraging, organized]}
+    relationships: {xiao: "Mentors Xiao's study plans.", rosa: "Coordinates after-school sports with Rosa."}
+    schedule:
+      - {start_minute: 480, duration_minutes: 40, location: home_finn, intent: "Breakfast and lesson review"}
+      - {start_minute: 540, duration_minutes: 140, location: school, intent: "Teach morning class"}
+      - {start_minute: 720, duration_minutes: 60, location: sports_court, intent: "Check student practice"}
+      - {start_minute: 840, duration_minutes: 60, location: home_finn, intent: "Grade homework"}
+    memory_seeds: [{id: finn_thread, content: "Finn asked Rosa to make student practice welcoming for Xiao.", metadata: {thread: student_support}}]
+  - id: grace
+    name: Grace Imani
+    starting_location: home_grace
+    home_location: home_grace
+    sleep_location: home_grace
+    default_wake_window: [420, 540]
+    default_sleep_window: [1320, 1430]
+    persona: {currently: "Finishing mural panels for festival day.", lifestyle: "Creative and collaborative.", background: "Artist and studio coordinator.", traits: [imaginative, social, focused]}
+    relationships: {marco: "Designs festival signs with Marco.", victor: "Matches mural colors to Victor's music program."}
+    schedule:
+      - {start_minute: 480, duration_minutes: 40, location: home_grace, intent: "Breakfast and sketch mural ideas"}
+      - {start_minute: 540, duration_minutes: 140, location: art_studio, intent: "Paint mural panels"}
+      - {start_minute: 720, duration_minutes: 60, location: festival_green, intent: "Inspect stage backdrop"}
+      - {start_minute: 840, duration_minutes: 60, location: home_grace, intent: "Clean brushes at home"}
+    memory_seeds: [{id: grace_thread, content: "Grace and Marco are aligning festival signs with the mural backdrop.", metadata: {thread: festival_planning}}]
+  - id: hugo
+    name: Hugo Silva
+    starting_location: home_hugo
+    home_location: home_hugo
+    sleep_location: home_hugo
+    default_wake_window: [420, 540]
+    default_sleep_window: [1320, 1430]
+    persona: {currently: "Checking garden beds and sharing harvest plans.", lifestyle: "Outdoor, patient, community-minded.", background: "Community garden coordinator.", traits: [grounded, generous, observant]}
+    relationships: {ben: "Trades produce plans with Ben.", yara: "Coordinates seed inventory with Yara."}
+    schedule:
+      - {start_minute: 480, duration_minutes: 40, location: home_hugo, intent: "Breakfast and review seed list"}
+      - {start_minute: 540, duration_minutes: 140, location: community_garden, intent: "Tend garden beds"}
+      - {start_minute: 720, duration_minutes: 60, location: green_market, intent: "Share harvest update"}
+      - {start_minute: 840, duration_minutes: 60, location: home_hugo, intent: "Rest after gardening"}
+    memory_seeds: [{id: hugo_thread, content: "Hugo remembers Yara marked basil and bean seeds for the weekend planting.", metadata: {thread: garden_market}}]
+  - id: iris
+    name: Iris Vale
+    starting_location: home_iris
+    home_location: home_iris
+    sleep_location: home_iris
+    default_wake_window: [420, 540]
+    default_sleep_window: [1320, 1430]
+    persona: {currently: "Planning riverside walks and quiet check-ins.", lifestyle: "Gentle, reflective, often outdoors.", background: "Retired counselor who volunteers in the park.", traits: [empathetic, calm, perceptive]}
+    relationships: {quinn: "Shares quiet temple duties with Quinn.", priya: "Helps Priya plan calm outdoor time for children."}
+    schedule:
+      - {start_minute: 480, duration_minutes: 40, location: home_iris, intent: "Breakfast and journal"}
+      - {start_minute: 540, duration_minutes: 140, location: riverside_park, intent: "Lead morning walk"}
+      - {start_minute: 720, duration_minutes: 60, location: temple, intent: "Quiet volunteer hour"}
+      - {start_minute: 840, duration_minutes: 60, location: home_iris, intent: "Rest and write reflections"}
+    memory_seeds: [{id: iris_thread, content: "Iris plans to help Priya bring the children to the park if the morning stays calm.", metadata: {thread: care_network}}]
+  - id: jules
+    name: Jules Hart
+    starting_location: home_jules
+    home_location: home_jules
+    sleep_location: home_jules
+    default_wake_window: [420, 540]
+    default_sleep_window: [1320, 1430]
+    persona: {currently: "Baking bread and preparing event cakes.", lifestyle: "Early, precise, generous with food.", background: "Baker and breakfast supplier.", traits: [reliable, cheerful, disciplined]}
+    relationships: {ada: "Delivers pastries to Ada's cafe.", marco: "Coordinates festival cake timing with Marco."}
+    schedule:
+      - {start_minute: 480, duration_minutes: 40, location: home_jules, intent: "Breakfast and check bake list"}
+      - {start_minute: 540, duration_minutes: 140, location: bakery, intent: "Bake morning bread"}
+      - {start_minute: 720, duration_minutes: 60, location: riverside_cafe, intent: "Deliver pastries", completion_tags: [deliver_pastries, place_delivery, deliver pastries, delivery]}
+      - {start_minute: 840, duration_minutes: 60, location: home_jules, intent: "Rest after baking"}
+    memory_seeds: [{id: jules_thread, content: "Jules promised Ada extra pastries for residents discussing festival work.", metadata: {thread: festival_planning}}]
+  - id: kai
+    name: Kai Brooks
+    starting_location: home_kai
+    home_location: home_kai
+    sleep_location: home_kai
+    default_wake_window: [420, 540]
+    default_sleep_window: [1320, 1430]
+    persona: {currently: "Managing grocery inventory and delivery requests.", lifestyle: "Practical, fast-moving, detail-aware.", background: "Grocery clerk and errand organizer.", traits: [efficient, witty, dependable]}
+    relationships: {wren: "Coordinates parcel pickups with Wren.", ben: "Compares produce shortages with Ben."}
+    schedule:
+      - {start_minute: 480, duration_minutes: 40, location: home_kai, intent: "Breakfast and inventory notes"}
+      - {start_minute: 540, duration_minutes: 140, location: grocery, intent: "Stock grocery shelves"}
+      - {start_minute: 720, duration_minutes: 60, location: postal_office, intent: "Check delivery requests"}
+      - {start_minute: 840, duration_minutes: 60, location: home_kai, intent: "Update orders at home"}
+    memory_seeds: [{id: kai_thread, content: "Kai expects Wren to bring parcel notes for grocery deliveries.", metadata: {thread: delivery_network}}]
+  - id: lina
+    name: Lina Torres
+    starting_location: home_lina
+    home_location: home_lina
+    sleep_location: home_lina
+    default_wake_window: [420, 540]
+    default_sleep_window: [1320, 1430]
+    persona: {currently: "Watching train arrivals and greeting visitors.", lifestyle: "Punctual, hospitable, transit-aware.", background: "Station attendant.", traits: [punctual, friendly, alert]}
+    relationships: {nora: "Tips Nora about noteworthy arrivals.", wren: "Shares route timing with Wren."}
+    schedule:
+      - {start_minute: 480, duration_minutes: 40, location: home_lina, intent: "Breakfast and check timetable"}
+      - {start_minute: 540, duration_minutes: 140, location: train_platform, intent: "Monitor morning arrivals"}
+      - {start_minute: 720, duration_minutes: 60, location: newspaper_office, intent: "Report arrival notes"}
+      - {start_minute: 840, duration_minutes: 60, location: home_lina, intent: "Rest after station shift"}
+    memory_seeds: [{id: lina_thread, content: "Lina may tell Nora if out-of-town performers arrive for the festival.", metadata: {thread: visitor_arrivals}}]
+  - id: marco
+    name: Marco Bell
+    starting_location: home_marco
+    home_location: home_marco
+    sleep_location: home_marco
+    default_wake_window: [420, 540]
+    default_sleep_window: [1320, 1430]
+    persona: {currently: "Coordinating festival setup and volunteer lists.", lifestyle: "Busy civic organizer.", background: "Town events coordinator.", traits: [organized, persuasive, energetic]}
+    relationships: {grace: "Depends on Grace for stage visuals.", jules: "Schedules food tables with Jules."}
+    schedule:
+      - {start_minute: 480, duration_minutes: 40, location: home_marco, intent: "Breakfast and volunteer list"}
+      - {start_minute: 540, duration_minutes: 140, location: festival_green, intent: "Prepare festival layout"}
+      - {start_minute: 720, duration_minutes: 60, location: town_hall, intent: "File event permits"}
+      - {start_minute: 840, duration_minutes: 60, location: home_marco, intent: "Revise setup plan"}
+    memory_seeds: [{id: marco_thread, content: "Marco is counting on Grace, Jules, and Tara for a smooth festival setup.", metadata: {thread: festival_planning}}]
+  - id: nora
+    name: Nora Reed
+    starting_location: home_nora
+    home_location: home_nora
+    sleep_location: home_nora
+    default_wake_window: [420, 540]
+    default_sleep_window: [1320, 1430]
+    persona: {currently: "Gathering quotes for the district bulletin.", lifestyle: "Curious, mobile, deadline-driven.", background: "Local newspaper editor.", traits: [curious, concise, persistent]}
+    relationships: {lina: "Checks train news with Lina.", ada: "Uses the cafe for informal interviews."}
+    schedule:
+      - {start_minute: 480, duration_minutes: 40, location: home_nora, intent: "Breakfast and outline story"}
+      - {start_minute: 540, duration_minutes: 140, location: newspaper_office, intent: "Edit morning bulletin"}
+      - {start_minute: 720, duration_minutes: 60, location: riverside_cafe, intent: "Interview residents"}
+      - {start_minute: 840, duration_minutes: 60, location: home_nora, intent: "Draft final notes"}
+    memory_seeds: [{id: nora_thread, content: "Nora wants quotes from Ada and Lina about festival visitors.", metadata: {thread: visitor_arrivals}}]
+  - id: owen
+    name: Owen Miles
+    starting_location: home_owen
+    home_location: home_owen
+    sleep_location: home_owen
+    default_wake_window: [420, 540]
+    default_sleep_window: [1320, 1430]
+    persona: {currently: "Building small fixtures and repairing signs.", lifestyle: "Maker, quiet problem-solver.", background: "Makers hall coordinator.", traits: [inventive, patient, precise]}
+    relationships: {dan: "Shares tool plans with Dan.", grace: "Builds frames for Grace's mural panels."}
+    schedule:
+      - {start_minute: 480, duration_minutes: 40, location: home_owen, intent: "Breakfast and measure materials"}
+      - {start_minute: 540, duration_minutes: 140, location: makers_hall, intent: "Build event fixtures"}
+      - {start_minute: 720, duration_minutes: 60, location: repair_workshop, intent: "Borrow repair tools"}
+      - {start_minute: 840, duration_minutes: 60, location: home_owen, intent: "Update build notes"}
+    memory_seeds: [{id: owen_thread, content: "Owen and Dan need the repaired tool rack before stage setup begins.", metadata: {thread: safety_setup}}]
+  - id: priya
+    name: Priya Shah
+    starting_location: home_priya
+    home_location: home_priya
+    sleep_location: home_priya
+    default_wake_window: [420, 540]
+    default_sleep_window: [1320, 1430]
+    persona: {currently: "Managing daycare routines and family pickups.", lifestyle: "Warm, structured, protective.", background: "Daycare lead.", traits: [patient, nurturing, firm]}
+    relationships: {iris: "Plans calm park time with Iris.", finn: "Coordinates school transition notes with Finn."}
+    schedule:
+      - {start_minute: 480, duration_minutes: 40, location: home_priya, intent: "Breakfast and activity list"}
+      - {start_minute: 540, duration_minutes: 140, location: daycare, intent: "Lead morning childcare"}
+      - {start_minute: 720, duration_minutes: 60, location: riverside_park, intent: "Outdoor activity with children"}
+      - {start_minute: 840, duration_minutes: 60, location: home_priya, intent: "Rest and message families"}
+    memory_seeds: [{id: priya_thread, content: "Priya trusts Iris to help keep the park outing calm and safe.", metadata: {thread: care_network}}]
+  - id: quinn
+    name: Quinn Hale
+    starting_location: home_quinn
+    home_location: home_quinn
+    sleep_location: home_quinn
+    default_wake_window: [420, 540]
+    default_sleep_window: [1320, 1430]
+    persona: {currently: "Preparing quiet temple visits and elder support.", lifestyle: "Reflective, discreet, supportive.", background: "Temple caretaker and volunteer coordinator.", traits: [gentle, private, dependable]}
+    relationships: {iris: "Shares quiet reflection duties with Iris.", elena: "Relays elder care concerns to Elena."}
+    schedule:
+      - {start_minute: 480, duration_minutes: 40, location: home_quinn, intent: "Breakfast and read support notes"}
+      - {start_minute: 540, duration_minutes: 140, location: temple, intent: "Open quiet temple"}
+      - {start_minute: 720, duration_minutes: 60, location: clinic, intent: "Share elder care updates"}
+      - {start_minute: 840, duration_minutes: 60, location: home_quinn, intent: "Rest after visits"}
+    memory_seeds: [{id: quinn_thread, content: "Quinn plans to tell Elena which elders may need gentle check-ins.", metadata: {thread: care_network}}]
+  - id: rosa
+    name: Rosa King
+    starting_location: home_rosa
+    home_location: home_rosa
+    sleep_location: home_rosa
+    default_wake_window: [420, 540]
+    default_sleep_window: [1320, 1430]
+    persona: {currently: "Setting up student practice and community games.", lifestyle: "Active, motivating, direct.", background: "Sports coach.", traits: [energetic, fair, encouraging]}
+    relationships: {finn: "Runs after-school practice for Finn's students.", xiao: "Encourages Xiao to join practice."}
+    schedule:
+      - {start_minute: 480, duration_minutes: 40, location: home_rosa, intent: "Breakfast and practice plan"}
+      - {start_minute: 540, duration_minutes: 140, location: sports_court, intent: "Set up drills"}
+      - {start_minute: 720, duration_minutes: 60, location: school, intent: "Coordinate student practice"}
+      - {start_minute: 840, duration_minutes: 60, location: home_rosa, intent: "Rest and log equipment"}
+    memory_seeds: [{id: rosa_thread, content: "Rosa promised Finn a practice that new students can join without pressure.", metadata: {thread: student_support}}]
+  - id: sam
+    name: Sam Patel
+    starting_location: home_sam
+    home_location: home_sam
+    sleep_location: home_sam
+    default_wake_window: [420, 540]
+    default_sleep_window: [1320, 1430]
+    persona: {currently: "Filling pharmacy orders and tracking pickup notes.", lifestyle: "Careful, quiet, deadline-aware.", background: "Pharmacy clerk.", traits: [careful, discreet, reliable]}
+    relationships: {elena: "Coordinates prescriptions with Elena.", kai: "Shares delivery notes with Kai."}
+    schedule:
+      - {start_minute: 480, duration_minutes: 40, location: home_sam, intent: "Breakfast and prescription list"}
+      - {start_minute: 540, duration_minutes: 140, location: pharmacy, intent: "Prepare medicine orders"}
+      - {start_minute: 720, duration_minutes: 60, location: clinic, intent: "Confirm clinic requests"}
+      - {start_minute: 840, duration_minutes: 60, location: home_sam, intent: "Rest and file notes", completion_tags: [rest, file_notes, review_notes, rest and file notes]}
+    memory_seeds: [{id: sam_thread, content: "Sam and Elena are watching for medicine pickups tied to elder support.", metadata: {thread: care_network}}]
+  - id: tara
+    name: Tara West
+    starting_location: home_tara
+    home_location: home_tara
+    sleep_location: home_tara
+    default_wake_window: [420, 540]
+    default_sleep_window: [1320, 1430]
+    persona: {currently: "Checking emergency gear before public events.", lifestyle: "Disciplined, alert, civic-minded.", background: "Fire station captain.", traits: [brave, practical, vigilant]}
+    relationships: {dan: "Asks Dan to repair small safety tools.", marco: "Reviews festival safety with Marco."}
+    schedule:
+      - {start_minute: 480, duration_minutes: 40, location: home_tara, intent: "Breakfast and safety checklist"}
+      - {start_minute: 540, duration_minutes: 140, location: fire_station, intent: "Inspect emergency equipment", completion_tags: [inspect_equipment, inspect emergency equipment, safety_check]}
+      - {start_minute: 720, duration_minutes: 60, location: festival_green, intent: "Review event safety"}
+      - {start_minute: 840, duration_minutes: 60, location: home_tara, intent: "Rest and update checklist"}
+    memory_seeds: [{id: tara_thread, content: "Tara needs Dan and Marco to close safety gaps before festival setup finishes.", metadata: {thread: safety_setup}}]
+  - id: uma
+    name: Uma Chen
+    starting_location: home_uma
+    home_location: home_uma
+    sleep_location: home_uma
+    default_wake_window: [420, 540]
+    default_sleep_window: [1320, 1430]
+    persona: {currently: "Curating bookshop picks and club notes.", lifestyle: "Literary, sociable, attentive.", background: "Bookshop owner.", traits: [thoughtful, expressive, curious]}
+    relationships: {cara: "Coordinates reading club with Cara.", victor: "Trades event program notes with Victor."}
+    schedule:
+      - {start_minute: 480, duration_minutes: 40, location: home_uma, intent: "Breakfast and read catalog notes"}
+      - {start_minute: 540, duration_minutes: 140, location: bookshop, intent: "Open bookshop"}
+      - {start_minute: 720, duration_minutes: 60, location: public_library, intent: "Share reading club picks"}
+      - {start_minute: 840, duration_minutes: 60, location: home_uma, intent: "Rest and write shelf cards"}
+    memory_seeds: [{id: uma_thread, content: "Uma wants Cara to include local memory stories in the reading club display.", metadata: {thread: reading_club}}]
+  - id: victor
+    name: Victor Lane
+    starting_location: home_victor
+    home_location: home_victor
+    sleep_location: home_victor
+    default_wake_window: [420, 540]
+    default_sleep_window: [1320, 1430]
+    persona: {currently: "Arranging rehearsal sheets for the festival program.", lifestyle: "Musical, collaborative, slightly scattered.", background: "Music teacher and choir lead.", traits: [creative, warm, distractible]}
+    relationships: {grace: "Aligns music program with Grace's mural theme.", uma: "Borrows poems from Uma for performance notes."}
+    schedule:
+      - {start_minute: 480, duration_minutes: 40, location: home_victor, intent: "Breakfast and tune notes"}
+      - {start_minute: 540, duration_minutes: 140, location: music_room, intent: "Lead rehearsal"}
+      - {start_minute: 720, duration_minutes: 60, location: art_studio, intent: "Coordinate performance mood"}
+      - {start_minute: 840, duration_minutes: 60, location: home_victor, intent: "Rest and sort sheet music"}
+    memory_seeds: [{id: victor_thread, content: "Victor plans to ask Grace whether mural colors fit the evening music set.", metadata: {thread: festival_planning}}]
+  - id: wren
+    name: Wren Fox
+    starting_location: home_wren
+    home_location: home_wren
+    sleep_location: home_wren
+    default_wake_window: [420, 540]
+    default_sleep_window: [1320, 1430]
+    persona: {currently: "Sorting mail and delivery notes across town.", lifestyle: "Route-driven, quick, observant.", background: "Postal clerk and courier.", traits: [alert, friendly, efficient]}
+    relationships: {kai: "Hands delivery requests to Kai.", lina: "Checks train parcel timing with Lina."}
+    schedule:
+      - {start_minute: 480, duration_minutes: 40, location: home_wren, intent: "Breakfast and route cards"}
+      - {start_minute: 540, duration_minutes: 140, location: postal_office, intent: "Sort mail and parcels"}
+      - {start_minute: 720, duration_minutes: 60, location: grocery, intent: "Deliver grocery requests"}
+      - {start_minute: 840, duration_minutes: 60, location: home_wren, intent: "Rest and update route"}
+    memory_seeds: [{id: wren_thread, content: "Wren has parcel notes that may change Kai's grocery delivery order.", metadata: {thread: delivery_network}}]
+  - id: xiao
+    name: Xiao Nguyen
+    starting_location: home_xiao
+    home_location: home_xiao
+    sleep_location: home_xiao
+    default_wake_window: [420, 540]
+    default_sleep_window: [1320, 1430]
+    persona: {currently: "Balancing schoolwork and practice invitations.", lifestyle: "Studious and tentative in groups.", background: "Older student helping younger classmates.", traits: [curious, shy, diligent]}
+    relationships: {finn: "Gets study guidance from Finn.", rosa: "Is being encouraged by Rosa to join practice."}
+    schedule:
+      - {start_minute: 480, duration_minutes: 40, location: home_xiao, intent: "Breakfast and review homework"}
+      - {start_minute: 540, duration_minutes: 140, location: school, intent: "Attend morning class"}
+      - {start_minute: 720, duration_minutes: 60, location: sports_court, intent: "Try practice drills"}
+      - {start_minute: 840, duration_minutes: 60, location: home_xiao, intent: "Rest and study"}
+    memory_seeds: [{id: xiao_thread, content: "Xiao remembers Finn said Rosa's practice would be low-pressure today.", metadata: {thread: student_support}}]
+  - id: yara
+    name: Yara Moss
+    starting_location: home_yara
+    home_location: home_yara
+    sleep_location: home_yara
+    default_wake_window: [420, 540]
+    default_sleep_window: [1320, 1430]
+    persona: {currently: "Sorting garden seeds and market requests.", lifestyle: "Patient, practical, botanical.", background: "Seed librarian and volunteer gardener.", traits: [patient, meticulous, kind]}
+    relationships: {hugo: "Shares planting decisions with Hugo.", ben: "Asks Ben which produce is short at market."}
+    schedule:
+      - {start_minute: 480, duration_minutes: 40, location: home_yara, intent: "Breakfast and seed notes"}
+      - {start_minute: 540, duration_minutes: 140, location: community_garden, intent: "Sort seed inventory"}
+      - {start_minute: 720, duration_minutes: 60, location: green_market, intent: "Check produce needs"}
+      - {start_minute: 840, duration_minutes: 60, location: home_yara, intent: "Rest and update seed ledger"}
+    memory_seeds: [{id: yara_thread, content: "Yara marked seed packets for Hugo and wants Ben's market shortage list.", metadata: {thread: garden_market}}]

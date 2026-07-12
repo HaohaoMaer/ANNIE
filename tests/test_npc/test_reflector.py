@@ -5,10 +5,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from annie.npc.reflector import Reflector
-from annie.npc.context import AgentContext
-from annie.npc.state import AgentState
-from annie.npc.tracing import EventType, Tracer
+from annie.npc.cognition.reflector import Reflector
+from annie.npc.core.context import AgentContext
+from annie.npc.core.state import AgentState
+from annie.npc.observability.tracing import EventType, Tracer
 
 
 @pytest.fixture

@@ -5,16 +5,15 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, cast
 
 import chromadb
 from chromadb.api import ClientAPI
 
-from annie.npc.context import AgentContext
-from annie.npc.graph_registry import AgentGraphID
+from annie.npc.core.context import AgentContext
 from annie.npc.memory.interface import MemoryInterface
-from annie.npc.response import ActionRequest, ActionResult, AgentResponse
-from annie.npc.routes import AgentRoute
+from annie.npc.core.response import ActionRequest, ActionResult, AgentResponse
+from annie.npc.core.routes import AgentRoute
 from annie.npc.tools.base_tool import ToolDef
 from annie.world_engine.base import WorldEngine
 from annie.world_engine.history import HistoryStore
@@ -28,7 +27,9 @@ from annie.town.domain import (
     MoveResult,
     ReflectionEvidence,
     ResidentDayPlan,
+    ScheduleCompletion,
     ScheduleRevision,
+    ScheduleSatisfaction,
     ScheduleSegment,
     SemanticAffordance,
     TownEvent,
@@ -47,14 +48,31 @@ from annie.town.prompt_policy import (
     default_subtasks_for,
 )
 from annie.town.eventing import NPCRegistry, TownEventBus
+from annie.town.persistence import (
+    TOWN_RUNTIME_SNAPSHOT_VERSION,
+    TownPersistenceError,
+    build_run_manifest,
+    engine_runtime_from_dict,
+    engine_runtime_to_dict,
+    event_bus_from_dict,
+    event_bus_to_dict,
+    load_run_manifest,
+    load_snapshot,
+    npc_registry_from_dict,
+    resolve_manifest_paths,
+    town_state_from_snapshot_sections,
+    town_state_to_snapshot_sections,
+    validate_snapshot,
+    write_json_atomic,
+)
 from annie.town.tools import (
-    FinishScheduleSegmentTool,
+    CompleteCurrentScheduleTool,
+    FindAffordanceTargetsTool,
     InspectAffordancesTool,
     InteractWithTool,
     MoveToTool,
     ObserveTool,
-    SpeakToTool,
-    StartConversationTool,
+    TalkToTool,
     UseAffordanceTool,
     WaitTool,
 )
@@ -80,20 +98,52 @@ DEFAULT_DAY_START_MINUTE = 8 * 60
 DEFAULT_DAY_END_MINUTE = 18 * 60
 LOOP_GUARD_WINDOW = 6
 TOWN_ACTION_TOOL_NAMES = [
-    "declare_action",
-    "request_action",
     "memory_store",
     "plan_todo",
     "move_to",
     "observe",
+    "talk_to",
     "speak_to",
     "start_conversation",
     "interact_with",
     "inspect_affordances",
+    "find_affordance_targets",
     "use_affordance",
     "wait",
+    "complete_current_schedule",
     "finish_schedule_segment",
 ]
+
+ACTION_EFFECT_MODELS: dict[str, str] = {
+    "move_to": "immediate_effect",
+    "move": "immediate_effect",
+    "wait": "no_world_effect",
+    "talk_to": "immediate_effect",
+    "speak_to": "immediate_effect",
+    "start_conversation": "immediate_effect",
+    "conversation": "immediate_effect",
+    "interact_with": "immediate_effect",
+    "interact": "immediate_effect",
+    "use_affordance": "immediate_effect",
+    "complete_current_schedule": "immediate_effect",
+    "finish_schedule_segment": "immediate_effect",
+    "observe": "no_world_effect",
+    "inspect_affordances": "no_world_effect",
+    "find_affordance_targets": "no_world_effect",
+}
+ACTION_OCCUPANCY_MODELS: dict[str, str] = {
+    "complete_current_schedule": "instant_free",
+    "finish_schedule_segment": "instant_free",
+    "observe": "instant_free",
+    "inspect_affordances": "instant_free",
+    "find_affordance_targets": "instant_free",
+}
+SCHEDULE_COMPLETION_POLICIES = {
+    "first_matching_action",
+    "occupy_until_segment_end",
+    "min_matching_actions",
+    "explicit",
+}
 
 
 class TownAgent(Protocol):
@@ -115,8 +165,9 @@ class TownWorldEngine(WorldEngine):
         perception_policy: TownPerceptionPolicy | None = None,
     ) -> None:
         self.state = state
+        self._memory_path = Path(memory_path) if memory_path else _DEFAULT_TOWN_VECTOR_STORE
         self._client = chroma_client or chromadb.PersistentClient(
-            path=str(Path(memory_path) if memory_path else _DEFAULT_TOWN_VECTOR_STORE)
+            path=str(self._memory_path)
         )
         self._memories = memories or {}
         self._histories: dict[str, HistoryStore] = {}
@@ -140,7 +191,208 @@ class TownWorldEngine(WorldEngine):
         self._latest_schedule_revision_by_npc: dict[str, ScheduleRevision] = {}
         self.planning_log: list[dict[str, object]] = []
         self.loop_guard_events: list[dict[str, object]] = []
+        self.free_action_log: list[dict[str, object]] = []
         self._loop_guard_keys: set[tuple[object, ...]] = set()
+
+    def export_runtime_snapshot(
+        self,
+        *,
+        run_id: str | None = None,
+        replay_cursor: dict[str, object] | None = None,
+        metadata: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        """Build a versioned JSON-compatible snapshot of engine-owned state."""
+        snapshot: dict[str, object] = {
+            "schema_version": TOWN_RUNTIME_SNAPSHOT_VERSION,
+            "run": {
+                "run_id": run_id or "",
+                "metadata": metadata or {},
+                "history_backend": {"path": str(self._history_dir)},
+                "memory_backend": {"path": str(self._memory_path)},
+            },
+            "event_delivery": event_bus_to_dict(self.event_bus),
+            "loop_guards": {
+                "events": list(self.loop_guard_events),
+                "keys": [list(key) for key in sorted(self._loop_guard_keys, key=str)],
+            },
+            "replay_cursor": {
+                "next_tick": len(self.replay_log) + 1,
+                "replay_log_length": len(self.replay_log),
+                **(replay_cursor or {}),
+            },
+            "engine": engine_runtime_to_dict(
+                perception_policy=self.perception_policy,
+                npc_registry=self.npc_registry,
+                speak_cooldowns=self._speak_cooldowns,
+                schedule_revisions=self._schedule_revisions,
+                latest_schedule_revision_by_npc=self._latest_schedule_revision_by_npc,
+                planning_log=self.planning_log,
+                action_log=self.action_log,
+                replay_log=self.replay_log,
+                reflection_log=self.reflection_log,
+                chat_iter=self.chat_iter,
+                conversation_cooldown_minutes=self.conversation_cooldown_minutes,
+                speak_cooldown_minutes=self.speak_cooldown_minutes,
+                reflection_threshold=self.reflection_threshold,
+            ),
+        }
+        snapshot.update(town_state_to_snapshot_sections(self.state))
+        return snapshot
+
+    def save_runtime_snapshot(
+        self,
+        path: str | Path,
+        *,
+        run_id: str | None = None,
+        replay_cursor: dict[str, object] | None = None,
+        metadata: dict[str, object] | None = None,
+    ) -> Path:
+        """Atomically write the authoritative runtime snapshot."""
+        snapshot = self.export_runtime_snapshot(
+            run_id=run_id,
+            replay_cursor=replay_cursor,
+            metadata=metadata,
+        )
+        return write_json_atomic(path, snapshot)
+
+    @classmethod
+    def from_runtime_snapshot(
+        cls,
+        snapshot: str | Path | dict[str, object],
+        *,
+        chroma_client: ClientAPI | None = None,
+        memory_path: str | Path | None = None,
+        history_dir: str | Path | None = None,
+        memories: dict[str, MemoryInterface] | None = None,
+        validate_backend_paths: bool = False,
+    ) -> "TownWorldEngine":
+        """Rebuild a runnable town engine from a versioned runtime snapshot."""
+        payload = load_snapshot(snapshot) if isinstance(snapshot, str | Path) else validate_snapshot(snapshot)
+        run_payload = payload.get("run", {})
+        if not isinstance(run_payload, dict):
+            raise TownPersistenceError("runtime snapshot run section must be an object")
+        if memory_path is None:
+            backend = run_payload.get("memory_backend", {})
+            if isinstance(backend, dict) and isinstance(backend.get("path"), str):
+                memory_path = backend["path"]
+        if history_dir is None:
+            backend = run_payload.get("history_backend", {})
+            if isinstance(backend, dict) and isinstance(backend.get("path"), str):
+                history_dir = backend["path"]
+        if validate_backend_paths:
+            _validate_backend_path(memory_path, "memory_backend")
+            _validate_backend_path(history_dir, "history_backend")
+
+        state = town_state_from_snapshot_sections(payload)
+        runtime = engine_runtime_from_dict(_snapshot_mapping(payload, "engine"))
+        engine = cls(
+            state,
+            memories=memories,
+            chroma_client=chroma_client,
+            memory_path=memory_path,
+            history_dir=history_dir,
+            perception_policy=runtime["perception_policy"],  # type: ignore[arg-type]
+        )
+        engine.event_bus = event_bus_from_dict(_snapshot_mapping(payload, "event_delivery"))
+        engine._inboxes = engine.event_bus.inboxes
+        engine._seen_event_ids = engine.event_bus.seen_event_ids
+        registry_payload = _snapshot_mapping(_snapshot_mapping(payload, "engine"), "npc_registry")
+        engine.npc_registry = npc_registry_from_dict(registry_payload, state)
+        engine._speak_cooldowns = runtime["speak_cooldowns"]  # type: ignore[assignment]
+        engine._schedule_revisions = runtime["schedule_revisions"]  # type: ignore[assignment]
+        engine._latest_schedule_revision_by_npc = runtime["latest_schedule_revision_by_npc"]  # type: ignore[assignment]
+        engine.planning_log = runtime["planning_log"]  # type: ignore[assignment]
+        engine.action_log = runtime["action_log"]  # type: ignore[assignment]
+        engine.reflection_log = runtime["reflection_log"]  # type: ignore[assignment]
+        engine.replay_log = runtime["replay_log"]  # type: ignore[assignment]
+        engine.chat_iter = int(runtime["chat_iter"])
+        engine.conversation_cooldown_minutes = int(runtime["conversation_cooldown_minutes"])
+        engine.speak_cooldown_minutes = int(runtime["speak_cooldown_minutes"])
+        engine.reflection_threshold = int(runtime["reflection_threshold"])
+        loop_guards = _snapshot_mapping(payload, "loop_guards")
+        engine.loop_guard_events = list(loop_guards.get("events", []))  # type: ignore[arg-type]
+        engine._loop_guard_keys = {
+            _freeze_snapshot_key(item)
+            for item in loop_guards.get("keys", [])
+            if isinstance(item, list)
+        }
+        return engine
+
+    def save_run(
+        self,
+        run_dir: str | Path,
+        *,
+        run_id: str | None = None,
+        replay_paths: dict[str, str | Path] | None = None,
+        write_step_snapshot: bool = False,
+        model_summary: dict[str, object] | None = None,
+        validation: dict[str, object] | None = None,
+        diagnostics_path: str | Path | None = None,
+        validation_path: str | Path | None = None,
+        presentation_paths: dict[str, str | Path] | None = None,
+    ) -> dict[str, Path]:
+        """Save a manifest-backed run directory using ``state/latest.json``."""
+        root = Path(run_dir)
+        resolved_run_id = run_id or root.name
+        latest_path = root / "state" / "latest.json"
+        self.save_runtime_snapshot(latest_path, run_id=resolved_run_id)
+
+        step_paths: list[Path] = []
+        if write_step_snapshot:
+            step_path = root / "state" / "steps" / f"step-{len(self.replay_log):06d}.json"
+            self.save_runtime_snapshot(step_path, run_id=resolved_run_id)
+            step_paths.append(step_path)
+
+        manifest = build_run_manifest(
+            run_id=resolved_run_id,
+            run_dir=root,
+            latest_snapshot_path=latest_path,
+            step_snapshot_paths=step_paths,
+            replay_paths=replay_paths or {},
+            history_path=self._history_dir,
+            vector_store_path=self._memory_path,
+            model_summary=model_summary,
+            validation=validation,
+            diagnostics_path=diagnostics_path,
+            validation_path=validation_path,
+            presentation_paths=presentation_paths,
+        )
+        manifest_path = write_json_atomic(root / "manifest.json", manifest)
+        return {"manifest": manifest_path, "latest_snapshot": latest_path, **{
+            f"step_snapshot_{index}": path for index, path in enumerate(step_paths, start=1)
+        }}
+
+    @classmethod
+    def resume_run(
+        cls,
+        run_dir_or_manifest: str | Path,
+        *,
+        chroma_client: ClientAPI | None = None,
+        memories: dict[str, MemoryInterface] | None = None,
+    ) -> "TownWorldEngine":
+        """Resume a TownWorld run from a run directory or manifest path."""
+        input_path = Path(run_dir_or_manifest)
+        manifest_path = input_path if input_path.is_file() else input_path / "manifest.json"
+        run_dir = manifest_path.parent
+        manifest = load_run_manifest(manifest_path)
+        resolved = resolve_manifest_paths(run_dir, manifest)
+        latest_snapshot = resolved["latest_snapshot_path"]
+        history_path = resolved["history_path"]
+        vector_store_path = resolved["vector_store_path"]
+        if not isinstance(latest_snapshot, Path):
+            raise TownPersistenceError("town run manifest does not resolve latest snapshot")
+        if not latest_snapshot.exists():
+            raise TownPersistenceError(f"missing latest snapshot: {latest_snapshot}")
+        _validate_backend_path(history_path, "history_path")
+        _validate_backend_path(vector_store_path, "vector_store_path")
+        return cls.from_runtime_snapshot(
+            latest_snapshot,
+            chroma_client=chroma_client,
+            memory_path=vector_store_path,
+            history_dir=history_path,
+            memories=memories,
+            validate_backend_paths=True,
+        )
 
     def plan_day_for_resident(
         self,
@@ -158,12 +410,16 @@ class TownWorldEngine(WorldEngine):
         schedule_day = self.state.clock.day if day is None else day
 
         if repair_invalid:
+            repair_start = min((segment.start_minute for segment in schedule), default=0)
+            repair_end = max((segment.end_minute for segment in schedule), default=24 * 60)
+            if repair_start == 0:
+                repair_end = max(repair_end, 24 * 60)
             accepted_schedule, validation_result = self._validate_and_repair_schedule(
                 npc_id,
                 schedule,
                 day=schedule_day,
-                start_minute=0,
-                end_minute=24 * 60,
+                start_minute=repair_start,
+                end_minute=repair_end,
             )
         else:
             self._assert_schedule_valid(npc_id, schedule)
@@ -212,8 +468,36 @@ class TownWorldEngine(WorldEngine):
         self.state.clock.minute = start_minute
         self.state.clear_current_action(npc_id)
         resident = self.state.residents[npc_id]
+        if start_minute == 0:
+            self._initialize_resident_day_lifecycle(npc_id, day=schedule_day)
         day_plan = resident.day_plans.setdefault(schedule_day, ResidentDayPlan(day=schedule_day))
         day_plan.started_minute = start_minute
+        existing_schedule = [
+            segment
+            for segment in resident.schedule
+            if (schedule_day if segment.day is None else segment.day) == schedule_day
+        ]
+        if existing_schedule and self._schedule_is_valid(npc_id, existing_schedule):
+            resident.schedule_day = schedule_day
+            day_plan.validation = {
+                **day_plan.validation,
+                "ok": True,
+                "reused_existing_schedule": True,
+                "segment_count": len(existing_schedule),
+            }
+            day_plan.schedule_summary = _schedule_summary(existing_schedule)
+            self._record_planning_checkpoint(
+                npc_id,
+                day=schedule_day,
+                stage="existing_schedule_reused",
+                payload={
+                    "schedule": [
+                        _full_schedule_dict(segment) for segment in existing_schedule
+                    ],
+                    "validation": day_plan.validation,
+                },
+            )
+            return existing_schedule
 
         evidence = self.retrieve_planning_evidence(npc_id)
         day_plan.planning_evidence = evidence
@@ -274,6 +558,7 @@ class TownWorldEngine(WorldEngine):
         if npc_id not in self.state.residents:
             raise ValueError("unknown_resident")
         schedule_day = self.state.clock.day if day is None else day
+        self._finalize_due_current_actions([npc_id], at_minute=self.state.clock.minute)
         resident = self.state.residents[npc_id]
         day_plan = resident.day_plans.setdefault(schedule_day, ResidentDayPlan(day=schedule_day))
         schedule = [
@@ -286,12 +571,29 @@ class TownWorldEngine(WorldEngine):
             for item in self.state.completed_schedule_segments.get(npc_id, [])
             if (schedule_day if item.day is None else item.day) == schedule_day
         ]
+        schedule_evidence = self._day_schedule_evidence(
+            npc_id,
+            schedule,
+            completed,
+            day=schedule_day,
+        )
+        lifecycle_anomalies = self._settle_resident_overnight(
+            npc_id,
+            schedule,
+            schedule_evidence,
+            day=schedule_day,
+        )
         summary = (
             f"第 {schedule_day} 天：{npc_id} 计划 {len(schedule)} 段，"
-            f"完成 {len(completed)} 段。{_schedule_summary(schedule)}"
+            f"完成 {len(completed)} 段，未完成 "
+            f"{len([item for item in schedule_evidence if item['status'] != 'completed'])} 段。"
+            f"生命周期异常 {len(lifecycle_anomalies)} 项。"
+            f"{_schedule_summary(schedule)}"
         )
         day_plan.day_summary = summary
+        day_plan.schedule_evidence = schedule_evidence
         day_plan.ended_minute = self.state.clock.minute
+        day_plan.lifecycle_anomalies = lifecycle_anomalies
         self.memory_for(npc_id).remember(
             summary,
             category="impression",
@@ -301,13 +603,28 @@ class TownWorldEngine(WorldEngine):
                 "npc_id": npc_id,
                 "completed_count": len(completed),
                 "schedule_count": len(schedule),
+                "schedule_evidence": json.dumps(
+                    schedule_evidence,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                "lifecycle_anomalies": json.dumps(
+                    lifecycle_anomalies,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
             },
         )
         self._record_planning_checkpoint(
             npc_id,
             day=schedule_day,
             stage="day_end_summary",
-            payload={"summary": summary},
+            payload={
+                "summary": summary,
+                "schedule_evidence": schedule_evidence,
+                "lifecycle_anomalies": lifecycle_anomalies,
+                "resident_lifecycle": self._resident_lifecycle_payload(npc_id),
+            },
         )
         return summary
 
@@ -322,6 +639,197 @@ class TownWorldEngine(WorldEngine):
             npc_id: self.end_day_for_resident(npc_id, day=day)
             for npc_id in active_npcs
         }
+
+    def _initialize_resident_day_lifecycle(self, npc_id: str, *, day: int) -> None:
+        resident = self.state.residents[npc_id]
+        baseline = resident.sleep_location_id or resident.home_location_id
+        if baseline and baseline in self.state.locations:
+            self.state.set_location(npc_id, baseline)
+            resident.lifecycle_status = "sleeping"
+        else:
+            self._record_lifecycle_anomaly(
+                npc_id,
+                day=day,
+                reason="missing_home_or_sleep_location",
+                location_id=self.state.location_id_for(npc_id),
+            )
+        self._record_planning_checkpoint(
+            npc_id,
+            day=day,
+            stage="day_start_lifecycle",
+            payload=self._resident_lifecycle_payload(npc_id),
+        )
+
+    def _settle_resident_overnight(
+        self,
+        npc_id: str,
+        schedule: list[ScheduleSegment],
+        schedule_evidence: list[dict[str, object]],
+        *,
+        day: int,
+    ) -> list[dict[str, object]]:
+        resident = self.state.residents[npc_id]
+        home = resident.sleep_location_id or resident.home_location_id
+        final_location = self.state.location_id_for(npc_id)
+        anomalies: list[dict[str, object]] = []
+        sleep_segments = [
+            segment
+            for segment in schedule
+            if self._is_sleep_or_rest_segment(npc_id, segment)
+        ]
+        completed_starts = {
+            int(item["segment_start_minute"])
+            for item in schedule_evidence
+            if item.get("status") == "completed"
+        }
+        valid_sleep = bool(
+            sleep_segments
+            and any(segment.start_minute in completed_starts or segment.end_minute >= 24 * 60 for segment in sleep_segments)
+        )
+        if not home:
+            anomalies.append(
+                self._record_lifecycle_anomaly(
+                    npc_id,
+                    day=day,
+                    reason="missing_home_or_sleep_location",
+                    location_id=final_location,
+                )
+            )
+        elif final_location != home and not valid_sleep:
+            anomalies.append(
+                self._record_lifecycle_anomaly(
+                    npc_id,
+                    day=day,
+                    reason="ended_away_from_home_without_valid_sleep",
+                    location_id=final_location,
+                )
+            )
+        else:
+            self.state.set_location(npc_id, home)
+            resident.lifecycle_status = "sleeping"
+        if not sleep_segments:
+            anomalies.append(
+                self._record_lifecycle_anomaly(
+                    npc_id,
+                    day=day,
+                    reason="missing_sleep_or_rest_segment",
+                    location_id=final_location,
+                )
+            )
+        return [item for item in anomalies if item]
+
+    def _record_lifecycle_anomaly(
+        self,
+        npc_id: str,
+        *,
+        day: int,
+        reason: str,
+        location_id: str | None,
+    ) -> dict[str, object]:
+        anomaly = {
+            "npc_id": npc_id,
+            "day": day,
+            "minute": self.state.clock.minute,
+            "location_id": location_id,
+            "reason": reason,
+        }
+        self._record_planning_checkpoint(
+            npc_id,
+            day=day,
+            stage="lifecycle_anomaly",
+            payload=anomaly,
+        )
+        return anomaly
+
+    def _resident_lifecycle_payload(self, npc_id: str) -> dict[str, object]:
+        resident = self.state.residents[npc_id]
+        return {
+            "npc_id": npc_id,
+            "location_id": resident.location_id,
+            "home_location_id": resident.home_location_id,
+            "sleep_location_id": resident.sleep_location_id,
+            "default_wake_window": list(resident.default_wake_window or []),
+            "default_sleep_window": list(resident.default_sleep_window or []),
+            "lifecycle_status": resident.lifecycle_status,
+        }
+
+    def _day_schedule_evidence(
+        self,
+        npc_id: str,
+        schedule: list[ScheduleSegment],
+        completed: list[Any],
+        *,
+        day: int,
+    ) -> list[dict[str, object]]:
+        completed_by_key = {
+            (item.start_minute, item.location_id): item for item in completed
+        }
+        interrupted_actions = [
+            item
+            for item in self.action_log
+            if item.get("npc_id") == npc_id
+            and item.get("lifecycle_state") == "interrupted"
+        ]
+        revision_logs = [
+            item
+            for item in self.planning_log
+            if item.get("npc_id") == npc_id
+            and item.get("day") == day
+            and item.get("stage") == "schedule_revision"
+        ]
+        evidence: list[dict[str, object]] = []
+        for segment in schedule:
+            key = (segment.start_minute, segment.location_id)
+            completion = completed_by_key.get(key)
+            flags: list[str] = []
+            if _schedule_is_fallback(segment):
+                flags.append("fallback")
+            if any(_revision_mentions_segment(item, segment) for item in revision_logs):
+                flags.append("revised")
+            if any(_interruption_overlaps_segment(item, segment) for item in interrupted_actions):
+                flags.append("interrupted")
+
+            if completion is not None:
+                status = "completed"
+                note = completion.note
+                completion_type = getattr(completion, "completion_type", "explicit_request")
+                if completion_type in {"inferred_action_match", "automatic_action_match"}:
+                    flags.append("automatic")
+            elif segment.end_minute <= self.state.clock.minute:
+                status = "missed"
+                note = ""
+                flags.append("overdue")
+                if self.state.is_schedule_segment_satisfied(npc_id, segment):
+                    status = "satisfied_in_progress"
+                    flags = [item for item in flags if item != "overdue"]
+                    note = "satisfied by finalized action evidence"
+            else:
+                status = "active" if segment.contains(self.state.clock.minute) else "future_not_run"
+                note = ""
+                if self.state.is_schedule_segment_satisfied(npc_id, segment):
+                    status = "satisfied_in_progress"
+                    note = "satisfied by finalized action evidence"
+
+            evidence.append(
+                {
+                    "npc_id": npc_id,
+                    "day": day,
+                    "segment_start_minute": segment.start_minute,
+                    "segment_end_minute": segment.end_minute,
+                    "location_id": segment.location_id,
+                    "intent": segment.intent,
+                    "status": status,
+                    "flags": sorted(set(flags)),
+                    "note": note,
+                    "completion_type": getattr(completion, "completion_type", "") if completion is not None else "",
+                    "matched_action_id": getattr(completion, "matched_action_id", None) if completion is not None else None,
+                    "matched_action_type": getattr(completion, "matched_action_type", None) if completion is not None else None,
+                    "matching_reason": getattr(completion, "matching_reason", "") if completion is not None else "",
+                    "completion_policy": segment.completion_policy,
+                    "satisfied": self.state.is_schedule_segment_satisfied(npc_id, segment),
+                }
+            )
+        return evidence
 
     def retrieve_planning_evidence(self, npc_id: str) -> list[dict[str, object]]:
         memory = self.memory_for(npc_id)
@@ -352,6 +860,56 @@ class TownWorldEngine(WorldEngine):
             )
             if len(evidence) >= 8:
                 break
+        resident = self.state.resident_for(npc_id)
+        if resident is not None:
+            evidence.append(
+                {
+                    "category": "lifecycle",
+                    "content": (
+                        f"home={resident.home_location_id or 'unknown'}; "
+                        f"sleep={resident.sleep_location_id or 'unknown'}; "
+                        f"status={resident.lifecycle_status}; "
+                        f"location={resident.location_id}"
+                    ),
+                    "metadata": {
+                        "source": "town_lifecycle_state",
+                        **self._resident_lifecycle_payload(npc_id),
+                    },
+                }
+            )
+            for day, day_plan in sorted(resident.day_plans.items()):
+                if day_plan.lifecycle_anomalies:
+                    evidence.append(
+                        {
+                            "category": "lifecycle",
+                            "content": f"第 {day} 天生命周期异常：{day_plan.lifecycle_anomalies}",
+                            "metadata": {
+                                "source": "town_lifecycle_anomaly",
+                                "day": day,
+                                "anomalies": day_plan.lifecycle_anomalies,
+                            },
+                        }
+                    )
+                unfinished = [
+                    item
+                    for item in day_plan.schedule_evidence
+                    if item.get("status") != "completed"
+                ]
+                if not unfinished:
+                    continue
+                evidence.append(
+                    {
+                        "category": "schedule",
+                        "content": f"第 {day} 天有未完成日程证据：{unfinished}",
+                        "metadata": {
+                            "source": "town_unfinished_schedule",
+                            "day": day,
+                            "evidence": unfinished,
+                        },
+                    }
+                )
+                if len(evidence) >= 8:
+                    break
         return evidence
 
     def relationship_planning_evidence(self, npc_id: str) -> list[dict[str, object]]:
@@ -402,12 +960,24 @@ class TownWorldEngine(WorldEngine):
         return resident.scratch.currently
 
     def plan_wake_up_for_resident(self, npc_id: str, *, start_minute: int) -> int:
-        wake_up = start_minute
+        resident = self.state.residents[npc_id]
+        if resident.default_wake_window is not None:
+            wake_up = max(start_minute, resident.default_wake_window[0])
+        else:
+            wake_up = start_minute
+        if self.state.clock.minute < wake_up:
+            resident.lifecycle_status = "sleeping"
+        else:
+            resident.lifecycle_status = "awake"
         self._record_planning_checkpoint(
             npc_id,
             day=self.state.clock.day,
             stage="wake_up",
-            payload={"wake_up_minute": wake_up, "wake_up_time": _minute_label(wake_up)},
+            payload={
+                "wake_up_minute": wake_up,
+                "wake_up_time": _minute_label(wake_up),
+                "lifecycle": self._resident_lifecycle_payload(npc_id),
+            },
         )
         return wake_up
 
@@ -442,6 +1012,7 @@ class TownWorldEngine(WorldEngine):
         end_minute: int,
     ) -> list[ScheduleSegment]:
         fixture = self.state.schedule_for(npc_id)
+        resident = self.state.residents[npc_id]
         known_locations = [
             segment.location_id
             for segment in fixture
@@ -468,6 +1039,43 @@ class TownWorldEngine(WorldEngine):
                 )
             )
             minute += duration
+        if start_minute == 0 and resident.home_location_id:
+            wake = (
+                resident.default_wake_window[0]
+                if resident.default_wake_window is not None
+                else min(end_minute, DEFAULT_DAY_START_MINUTE)
+            )
+            if not any(self._is_sleep_or_rest_segment(npc_id, segment) for segment in segments):
+                segments.insert(
+                    0,
+                    ScheduleSegment(
+                        npc_id=npc_id,
+                        start_minute=0,
+                        duration_minutes=max(1, min(wake, end_minute)),
+                        location_id=resident.sleep_location_id or resident.home_location_id,
+                        intent="睡觉直到起床",
+                        subtasks=["lifecycle:sleep"],
+                        day=self.state.clock.day,
+                    ),
+                )
+            if end_minute >= 24 * 60:
+                sleep_start = (
+                    resident.default_sleep_window[0]
+                    if resident.default_sleep_window is not None
+                    else 22 * 60
+                )
+                if not any(segment.start_minute >= sleep_start for segment in segments):
+                    segments.append(
+                        ScheduleSegment(
+                            npc_id=npc_id,
+                            start_minute=max(start_minute, min(sleep_start, end_minute - 60)),
+                            duration_minutes=max(1, end_minute - max(start_minute, min(sleep_start, end_minute - 60))),
+                            location_id=resident.sleep_location_id or resident.home_location_id,
+                            intent="回家休息并睡觉",
+                            subtasks=["lifecycle:return_home", "lifecycle:sleep"],
+                            day=self.state.clock.day,
+                        )
+                    )
         self._record_planning_checkpoint(
             npc_id,
             day=self.state.clock.day,
@@ -492,6 +1100,7 @@ class TownWorldEngine(WorldEngine):
         relationship_evidence = self.relationship_planning_evidence(npc_id)
         current_location_id = self.state.location_id_for(npc_id)
         current_location = self.state.locations.get(current_location_id or "")
+        resident = self.state.residents[npc_id]
         fixture_schedule = self.state.schedule_for(npc_id)
         location_rows = []
         for location in self.state.locations.values():
@@ -519,6 +1128,11 @@ class TownWorldEngine(WorldEngine):
                         }
                         for obj in objects
                     ],
+                    "affordances": [_affordance_dict(item) for item in location.affordances],
+                    "object_affordances": {
+                        obj.id: [_affordance_dict(item) for item in obj.affordances]
+                        for obj in objects
+                    },
                 }
             )
 
@@ -526,6 +1140,11 @@ class TownWorldEngine(WorldEngine):
             "npc_id": npc_id,
             "current_location_id": current_location_id,
             "current_location_name": current_location.name if current_location else None,
+            "home_location_id": resident.home_location_id,
+            "sleep_location_id": resident.sleep_location_id,
+            "lifecycle_status": resident.lifecycle_status,
+            "default_wake_window": list(resident.default_wake_window or []),
+            "default_sleep_window": list(resident.default_sleep_window or []),
             "planning_window": {
                 "start_minute": start_minute,
                 "end_minute": end_minute,
@@ -547,7 +1166,8 @@ class TownWorldEngine(WorldEngine):
                         "location_id": "town_square",
                         "intent": "查看公告板",
                     }
-                ]
+                ],
+                "wake_up_minute": start_minute,
             },
         }
         situation = "\n".join(
@@ -555,6 +1175,8 @@ class TownWorldEngine(WorldEngine):
                 "你正在为 TownWorld resident 生成一天中的语义日程。",
                 f"居民 id：{npc_id}",
                 f"当前位置：{current_location_id or 'unknown'}",
+                f"家/睡眠地点：{resident.home_location_id or 'unknown'} / {resident.sleep_location_id or 'unknown'}",
+                f"生命周期状态：{resident.lifecycle_status}",
                 f"规划窗口：{_minute_label(start_minute)}-{_minute_label(end_minute)}",
                 "当前 fixture schedule：",
                 json.dumps(
@@ -572,6 +1194,9 @@ class TownWorldEngine(WorldEngine):
                 json.dumps(planning_payload["output_schema"], ensure_ascii=False),
                 "硬性约束：所有日程必须位于规划窗口内，start_minute >= "
                 f"{start_minute}，end_minute <= {end_minute}。"
+                "如果规划完整 00:00-24:00，一定要包含起床前睡眠和夜间休息/睡眠；"
+                "夜间睡眠地点必须是 home_location_id 或 sleep_location_id；"
+                "如果睡前人在外面，需要安排可达的回家/返回睡眠地点过渡。"
                 f"至少一个日程段必须从 {start_minute} 开始或覆盖 {_minute_label(start_minute)}。"
                 "第一段日程必须从 current_location_id 和可达出口出发安排；"
                 "如果第一段不在当前位置，必须预留足够 travel minutes。"
@@ -585,7 +1210,6 @@ class TownWorldEngine(WorldEngine):
             input_event="生成 resident daily schedule JSON。",
             tools=[],
             memory=memory,
-            graph_id=AgentGraphID.OUTPUT_STRUCTURED_JSON,
             route=AgentRoute.STRUCTURED_JSON,
             world_rules=(
                 "你只负责提出候选日程。TownWorldEngine 会校验地点、归属、"
@@ -600,16 +1224,16 @@ class TownWorldEngine(WorldEngine):
             situation=situation,
             extra={
                 "disabled_tools": [
-                    "declare_action",
-                    "request_action",
                     "memory_store",
                     "plan_todo",
                     "move_to",
                     "observe",
+                    "talk_to",
                     "speak_to",
                     "start_conversation",
                     "interact_with",
                     "wait",
+                    "complete_current_schedule",
                     "finish_schedule_segment",
                 ],
                 "town": {
@@ -697,7 +1321,6 @@ class TownWorldEngine(WorldEngine):
             input_event="基于小镇证据生成 distilled reflection。",
             tools=[],
             memory=self.memory_for(npc_id),
-            graph_id=AgentGraphID.REFLECTION_EVIDENCE_TO_MEMORY_CANDIDATE,
             route=AgentRoute.REFLECTION,
             world_rules=(
                 "反思阶段不得调用小镇 action tools，不得移动 NPC，不得写世界动作。"
@@ -770,6 +1393,7 @@ class TownWorldEngine(WorldEngine):
         *,
         minute: int | None = None,
         reflection_events: list[dict[str, object]] | None = None,
+        finalized_actions: list[dict[str, object]] | None = None,
     ) -> dict[str, object]:
         """Build a stable structured checkpoint snapshot for replay inspection."""
         snapshot_minute = self.state.clock.minute if minute is None else minute
@@ -780,6 +1404,7 @@ class TownWorldEngine(WorldEngine):
             "time": _minute_label(snapshot_minute),
             "planning_checkpoints": list(self.planning_log),
             "loop_guard_events": list(self.loop_guard_events),
+            "finalized_actions": list(finalized_actions or []),
             "residents": {
                 npc_id: self._resident_snapshot(npc_id, minute=snapshot_minute)
                 for npc_id in active_npcs
@@ -800,7 +1425,7 @@ class TownWorldEngine(WorldEngine):
         if location is None:
             situation = "当前小镇状态：这个 NPC 尚未被放置到小镇中。"
             extra = {
-                "disabled_tools": ["declare_action", "request_action", "memory_store"],
+                "disabled_tools": ["memory_store"],
                 "town": {"known": False},
             }
         else:
@@ -813,7 +1438,11 @@ class TownWorldEngine(WorldEngine):
             ]
             occupants = list(perception["visible_npc_ids"])
             schedule = self.state.current_schedule_segment(npc_id)
-            if schedule is not None and not schedule.subtasks:
+            if (
+                schedule is not None
+                and not schedule.subtasks
+                and schedule.completion_policy == "explicit"
+            ):
                 self.decompose_current_schedule_segment(npc_id)
                 schedule = self.state.current_schedule_segment(npc_id)
             selected_event_ids = list(perception["visible_event_ids"])
@@ -884,6 +1513,11 @@ class TownWorldEngine(WorldEngine):
                 repeat_guard_hint += " 最近 guard：" + "; ".join(
                     str(event.get("message", event.get("guard_type", "")))
                     for event in recent_loop_guards[-3:]
+                )
+                repeat_guard_hint += (
+                    " 不要重复同一个失败 intent；先 inspect_affordances 或 "
+                    "find_affordance_targets 查询建议目标，再 use_affordance 执行，"
+                "如果当前段已无法推进则 complete_current_schedule。"
                 )
             target_text = (
                 f"{schedule.location_id}，目标：{schedule.intent}"
@@ -970,9 +1604,9 @@ class TownWorldEngine(WorldEngine):
                     + _render_known_objects(perception["known_objects"]),
                     "当前日程：" + _render_schedule(schedule),
                     "当前日程已完成行动：" + schedule_progress,
-                    "日程完成判断：" + schedule_completion_hint,
+                    "日程满足证据：" + schedule_completion_hint,
                     "当前活动决策提示：",
-                    "- 日程拆解与完成：" + schedule_decision_hint,
+                    "- 当前活动：" + schedule_decision_hint,
                     "- 对象选择：" + object_selection_hint,
                     "- 等待判断：" + wait_decision_hint,
                     "- 对话策略：" + conversation_policy_hint,
@@ -980,7 +1614,7 @@ class TownWorldEngine(WorldEngine):
                 ]
             )
             extra = {
-                "disabled_tools": ["declare_action", "request_action", "memory_store"],
+                "disabled_tools": ["memory_store"],
                 "town": {
                     "known": True,
                     "time": self.state.clock.label(),
@@ -1042,7 +1676,6 @@ class TownWorldEngine(WorldEngine):
             input_event=event,
             tools=self.tools_for(npc_id),
             memory=memory,
-            graph_id=AgentGraphID.ACTION_EXECUTOR_DEFAULT,
             route=AgentRoute.ACTION,
             world_rules=(
                 "你只能感知当前语义地点中的信息。"
@@ -1061,33 +1694,25 @@ class TownWorldEngine(WorldEngine):
                 "不能用它替代移动、交互、说话、等待或完成日程。"
                 "使用 wait 表示主动把接下来一段模拟时间用于原地等待，"
                 "它不是等待下一个 tick 的流程控制工具。"
-                "move_to、wait、speak_to、start_conversation、interact_with、"
-                "finish_schedule_segment 一旦调用，本次行动就结束；"
+                "move_to、wait、talk_to、interact_with、use_affordance 一旦调用，本次行动就结束；"
                 "下一次感知必须来自小镇世界引擎的下一次调度。"
-                "使用 speak_to 只对同一地点可见 NPC 说话，"
-                "NPC-NPC 自发多轮聊天必须使用 start_conversation 发起，"
-                "不要用 speak_to 互相维持多轮聊天。"
+                "对话统一使用 talk_to；短回复、采访和闲聊都由世界引擎托管。"
                 "使用 interact_with 只与当前位置物体交互，"
+                "如果不知道该去哪里或对象支持什么，使用 find_affordance_targets "
+                "或 inspect_affordances；如果工具返回 suggested_affordances，"
+                "不要重复同一失败 intent，应改用建议的 use_affordance。"
                 "除 observe 外，小镇动作工具都会消耗模拟时间，工具返回值会展示动作的开始、"
                 "耗时和完成时间。"
                 "选择动作前应考虑动作耗时、移动耗时和当前日程剩余时间。"
-                "选择动作前先判断当前活动是否已经满足，再选择行动；"
-                "满足则优先结束日程。"
-                "只有在当前日程段已满足"
-                "或无法继续时才调用 finish_schedule_segment。"
-                "日程目标已经满足时，应调用 finish_schedule_segment。"
+                "选择动作前先判断当前活动是否已有足够证据，避免重复行动。"
+                "普通日程由 TownWorldEngine 根据最终行动证据自动推进。"
+                "只有 explicit policy、被阻塞或无法继续时才调用 complete_current_schedule。"
                 "日程不是计时打卡；目标达成后不要为了填满剩余时间重复同类交互。"
                 "非对话场景中不能只用自然语言描述行动；"
-                "如果你正在执行小镇日程，最终必须调用一个小镇 action tool、wait "
-                "或 finish_schedule_segment 结束本次激活。"
-                "如果日程目标地点不能直接到达，"
-                "先移动到一个可达的中转地点。"
-                "不是所有可见 NPC 都必须聊天；只有你自己判断值得交流时"
-                "才发起 start_conversation。"
-                "speak_to 是单次短消息，用于打招呼、通知或回答一句话，成功后本次行动结束。"
-                "start_conversation 是多轮聊天入口，由世界引擎控制轮次、结束和 cooldown。"
-                "收到对方 speak_to 后，最多直接 speak_to 回复一次；"
-                "如果继续深入聊天，应使用 start_conversation。"
+                "如果你正在执行小镇日程，最终必须调用一个具体小镇 action tool 或 wait 结束本次激活。"
+                "move_to 可以请求目标地点；如果目标不直达但图上可达，"
+                "世界引擎会沿最短路径自动推进到下一跳。"
+                "不是所有可见 NPC 都必须聊天；只有值得交流时才使用 talk_to。"
             ),
             situation="\n".join(
                 [
@@ -1140,12 +1765,19 @@ class TownWorldEngine(WorldEngine):
                     action_id=action.action_id,
                 )
 
-            travel_minutes = self._travel_minutes(npc_id, destination)
-            result = self.state.move_npc(npc_id, destination)
+            routed_destination, route = (
+                self._resolve_move_destination(npc_id, destination)
+                if action.type == "move_to"
+                else (destination, None)
+            )
+            travel_minutes = self._travel_minutes(npc_id, routed_destination or destination)
+            result = self.state.move_npc(npc_id, routed_destination or destination)
             action_result = self._move_result_to_action_result(
                 action,
                 result,
                 travel_minutes=travel_minutes,
+                requested_destination_id=destination,
+                route=route,
             )
             self._record_action_result(npc_id, action_result)
             return action_result
@@ -1162,12 +1794,13 @@ class TownWorldEngine(WorldEngine):
                 )
             return self.wait(npc_id, minutes, action_id=action.action_id)
 
-        if action.type == "finish_schedule_segment":
+        if action.type in {"complete_current_schedule", "finish_schedule_segment"}:
             note = action.payload.get("note", "")
-            return self.finish_schedule_segment(
+            return self.complete_current_schedule(
                 npc_id,
                 str(note),
                 action_id=action.action_id,
+                action_type=action.type,
             )
 
         if action.type == "observe":
@@ -1194,7 +1827,7 @@ class TownWorldEngine(WorldEngine):
                 )
             return self.speak_to(npc_id, target, text, action_id=action.action_id)
 
-        if action.type in {"start_conversation", "conversation"}:
+        if action.type in {"talk_to", "start_conversation", "conversation"}:
             target = action.payload.get("target_npc_id", action.payload.get("target"))
             topic = action.payload.get("topic_or_reason", action.payload.get("topic", ""))
             if not isinstance(target, str) or not target:
@@ -1205,11 +1838,12 @@ class TownWorldEngine(WorldEngine):
                     {"npc_id": npc_id, "payload": action.payload},
                     action_id=action.action_id,
                 )
-            return self.start_conversation(
+            return self.talk_to(
                 npc_id,
                 target,
                 str(topic),
                 action_id=action.action_id,
+                action_type=action.type,
             )
 
         if action.type in {"interact", "interact_with"}:
@@ -1274,11 +1908,8 @@ class TownWorldEngine(WorldEngine):
             PlanTodoTool(),
             MoveToTool(lambda destination_id: self.move_to(npc_id, destination_id)),
             ObserveTool(lambda: self.observe_action(npc_id)),
-            SpeakToTool(
-                lambda target_npc_id, text: self.speak_to(npc_id, target_npc_id, text)
-            ),
-            StartConversationTool(
-                lambda target_npc_id, topic_or_reason: self.start_conversation(
+            TalkToTool(
+                lambda target_npc_id, topic_or_reason: self.talk_to(
                     npc_id,
                     target_npc_id,
                     topic_or_reason,
@@ -1290,6 +1921,13 @@ class TownWorldEngine(WorldEngine):
             InspectAffordancesTool(
                 lambda target_id: self.inspect_affordances_action(npc_id, target_id)
             ),
+            FindAffordanceTargetsTool(
+                lambda query, location_id: self.find_affordance_targets_action(
+                    npc_id,
+                    query,
+                    location_id,
+                )
+            ),
             UseAffordanceTool(
                 lambda target_id, affordance_id, note: self.use_affordance(
                     npc_id,
@@ -1299,8 +1937,8 @@ class TownWorldEngine(WorldEngine):
                 )
             ),
             WaitTool(lambda minutes: self.wait(npc_id, minutes)),
-            FinishScheduleSegmentTool(
-                lambda note: self.finish_schedule_segment(npc_id, note)
+            CompleteCurrentScheduleTool(
+                lambda note: self.complete_current_schedule(npc_id, note)
             ),
         ]
 
@@ -1369,7 +2007,7 @@ class TownWorldEngine(WorldEngine):
         action_id: str | None = None,
     ) -> ActionResult:
         minute = self.state.clock.minute
-        return ActionResult(
+        result = ActionResult(
             action_id=action_id or ActionRequest(type="observe").action_id,
             action_type="observe",
             status="succeeded",
@@ -1383,6 +2021,8 @@ class TownWorldEngine(WorldEngine):
                 "end_time": _minute_label(minute + DEFAULT_OBSERVE_MINUTES),
             },
         )
+        self._record_free_action_result(npc_id, result)
+        return result
 
     def inspect_affordances_action(
         self,
@@ -1393,13 +2033,28 @@ class TownWorldEngine(WorldEngine):
     ) -> ActionResult:
         location = self.state.location_for(npc_id)
         if location is None:
-            return self._failed_action(
-                "inspect_affordances",
-                "unknown_npc",
-                f"{npc_id} 尚未被放置到小镇中。",
-                {"npc_id": npc_id, "target_id": target_id},
-                action_id=action_id,
+            minute = self.state.clock.minute
+            result = ActionResult(
+                action_id=action_id or ActionRequest(type="inspect_affordances").action_id,
+                action_type="inspect_affordances",
+                status="failed",
+                reason="unknown_npc",
+                observation=f"{npc_id} 尚未被放置到小镇中。",
+                facts={
+                    "npc_id": npc_id,
+                    "target_id": target_id,
+                    "reason": "unknown_npc",
+                    "start_minute": minute,
+                    "duration_minutes": DEFAULT_OBSERVE_MINUTES,
+                    "end_minute": minute + DEFAULT_OBSERVE_MINUTES,
+                    "effect_model": "no_world_effect",
+                    "occupancy_model": "instant_free",
+                    "lifecycle_state": "free",
+                    "effect_applied": False,
+                },
             )
+            self._record_free_action_result(npc_id, result)
+            return result
         result = self.inspect_affordances(npc_id, target_id)
         status = "succeeded" if result["ok"] else "failed"
         facts = {
@@ -1407,8 +2062,12 @@ class TownWorldEngine(WorldEngine):
             "start_minute": self.state.clock.minute,
             "duration_minutes": DEFAULT_OBSERVE_MINUTES,
             "end_minute": self.state.clock.minute + DEFAULT_OBSERVE_MINUTES,
+            "effect_model": "no_world_effect",
+            "occupancy_model": "instant_free",
+            "lifecycle_state": "free",
+            "effect_applied": False,
         }
-        return ActionResult(
+        action_result = ActionResult(
             action_id=action_id or ActionRequest(type="inspect_affordances").action_id,
             action_type="inspect_affordances",
             status=status,
@@ -1420,6 +2079,8 @@ class TownWorldEngine(WorldEngine):
             reason=None if result["ok"] else str(result.get("reason", "unavailable")),
             facts=facts,
         )
+        self._record_free_action_result(npc_id, action_result)
+        return action_result
 
     def inspect_affordances(
         self,
@@ -1455,6 +2116,178 @@ class TownWorldEngine(WorldEngine):
             "location_id": location.id,
             "targets": [_public_affordance_target(target)],
         }
+
+    def find_affordance_targets_action(
+        self,
+        npc_id: str,
+        query: str,
+        location_id: str | None = None,
+        *,
+        action_id: str | None = None,
+    ) -> ActionResult:
+        result = self.find_affordance_targets(npc_id, query, location_id)
+        ok = bool(result.get("ok"))
+        minute = self.state.clock.minute
+        results = result.get("results", [])
+        result_count = len(results) if isinstance(results, list) else 0
+        facts = {
+            **result,
+            "start_minute": minute,
+            "duration_minutes": DEFAULT_OBSERVE_MINUTES,
+            "end_minute": minute + DEFAULT_OBSERVE_MINUTES,
+            "effect_model": "no_world_effect",
+            "occupancy_model": "instant_free",
+            "lifecycle_state": "free",
+            "effect_applied": False,
+        }
+        action_result = ActionResult(
+            action_id=action_id or ActionRequest(type="find_affordance_targets").action_id,
+            action_type="find_affordance_targets",
+            status="succeeded" if ok else "failed",
+            reason=None if ok else str(result.get("reason", "unavailable")),
+            observation=(
+                f"找到 {result_count} 个 affordance 目标。"
+                if ok
+                else str(result.get("message", "无法查找 affordance 目标。"))
+            ),
+            facts=facts,
+        )
+        self._record_free_action_result(npc_id, action_result)
+        return action_result
+
+    def find_affordance_targets(
+        self,
+        npc_id: str,
+        query: str,
+        location_id: str | None = None,
+        *,
+        limit: int = 8,
+    ) -> dict[str, object]:
+        current_location = self.state.location_for(npc_id)
+        if current_location is None:
+            return {
+                "ok": False,
+                "reason": "unknown_npc",
+                "message": f"{npc_id} 尚未被放置到小镇中。",
+                "query": query,
+                "results": [],
+            }
+        if location_id:
+            scoped_location = self.state.locations.get(location_id)
+            if scoped_location is None:
+                return {
+                    "ok": False,
+                    "reason": "unknown_location",
+                    "message": f"地点 {location_id} 不存在。",
+                    "query": query,
+                    "results": [],
+                }
+            locations = [scoped_location]
+        else:
+            locations = list(self.state.locations.values())
+
+        matches: list[tuple[int, str, dict[str, object]]] = []
+        for location in locations:
+            self._append_affordance_target_matches(
+                matches,
+                query=query,
+                location=location,
+                target=self._location_affordance_target(location),
+                current_location_id=current_location.id,
+            )
+            for obj in self.state.objects_at(location.id):
+                self._append_affordance_target_matches(
+                    matches,
+                    query=query,
+                    location=location,
+                    target=self._object_affordance_target(obj),
+                    current_location_id=current_location.id,
+                )
+        matches.sort(key=lambda item: (-item[0], item[1]))
+        return {
+            "ok": True,
+            "query": query,
+            "location_id": location_id,
+            "current_location_id": current_location.id,
+            "results": [item[2] for item in matches[:limit]],
+        }
+
+    def _append_affordance_target_matches(
+        self,
+        matches: list[tuple[int, str, dict[str, object]]],
+        *,
+        query: str,
+        location: Location,
+        target: dict[str, object],
+        current_location_id: str,
+    ) -> None:
+        raw_affordances = target.get("affordances", [])
+        affordances = (
+            [
+                item
+                for item in raw_affordances
+                if isinstance(item, SemanticAffordance)
+            ]
+            if isinstance(raw_affordances, list)
+            else []
+        )
+        scored_affordances = [
+            (score, affordance)
+            for affordance in affordances
+            if (score := _affordance_match_score(query, affordance)) > 0
+        ]
+        target_score = _text_match_score(
+            query,
+            " ".join(
+                [
+                    str(target.get("id", "")),
+                    str(target.get("name", "")),
+                    str(target.get("description", "")),
+                    location.id,
+                    location.name,
+                ]
+            ),
+        )
+        if not scored_affordances and target_score <= 0:
+            return
+        best_affordance_score = max((score for score, _ in scored_affordances), default=0)
+        score = target_score + best_affordance_score
+        if location.id == current_location_id:
+            score += 3
+            travel_hint = "current_location"
+        elif location.id in self.state.locations[current_location_id].exits:
+            score += 1
+            travel_minutes = self.state.locations[current_location_id].exit_travel_minutes.get(
+                location.id,
+                DEFAULT_MOVE_MINUTES,
+            )
+            travel_hint = f"reachable_direct:{travel_minutes}m"
+        else:
+            travel_minutes = self._shortest_travel_minutes(current_location_id, location.id)
+            travel_hint = (
+                f"reachable_indirect:{travel_minutes}m"
+                if travel_minutes is not None
+                else "not_reachable_from_current_location"
+            )
+        matched_affordances = [
+            _affordance_dict(affordance)
+            for _, affordance in sorted(scored_affordances, key=lambda item: -item[0])
+        ]
+        if not matched_affordances and affordances:
+            matched_affordances = [_affordance_dict(affordances[0])]
+        matches.append(
+            (
+                score,
+                str(target.get("id", "")),
+                {
+                    **_public_affordance_target(target),
+                    "location_id": location.id,
+                    "location_name": location.name,
+                    "matched_affordances": matched_affordances[:3],
+                    "travel_hint": travel_hint,
+                },
+            )
+        )
 
     def _available_affordance_targets(
         self,
@@ -1650,11 +2483,12 @@ class TownWorldEngine(WorldEngine):
         topic_or_reason: str = "",
         *,
         action_id: str | None = None,
+        action_type: str = "start_conversation",
     ) -> ActionResult:
         agent = self._active_step_agent
         if agent is None:
             return self._failed_action(
-                "start_conversation",
+                action_type,
                 "missing_agent",
                 "当前没有可用于生成会话的 NPC agent。",
                 {"npc_id": npc_id, "target_npc_id": target_npc_id},
@@ -1679,7 +2513,7 @@ class TownWorldEngine(WorldEngine):
                     }
                 )
             return self._failed_action(
-                "start_conversation",
+                action_type,
                 blocked,
                 f"{npc_id} 暂时不能和 {target_npc_id} 发起会话：{blocked}。",
                 failed_facts,
@@ -1703,15 +2537,27 @@ class TownWorldEngine(WorldEngine):
         speakers = (npc_id, target_npc_id)
         close_reason = "max_turns"
         for exchange_index in range(self.chat_iter):
-            if not self._append_conversation_turn(
+            appended = self._append_conversation_turn(
                 session,
                 agent,
                 speakers[0],
                 speakers[1],
                 closing=False,
-            ):
-                close_reason = "empty_turn"
-                break
+            )
+            if not appended and exchange_index == 0 and not session.turns:
+                appended = self._append_conversation_turn(
+                    session,
+                    agent,
+                    speakers[0],
+                    speakers[1],
+                    closing=False,
+                )
+            if not appended:
+                return self._fail_empty_conversation(
+                    session,
+                    action_id=action_id or ActionRequest(type=action_type).action_id,
+                    action_type=action_type,
+                )
             if self._last_turn_repeats(session):
                 close_reason = "repeat_detected"
                 break
@@ -1733,8 +2579,11 @@ class TownWorldEngine(WorldEngine):
                 speakers[0],
                 closing=False,
             ):
-                close_reason = "empty_turn"
-                break
+                return self._fail_empty_conversation(
+                    session,
+                    action_id=action_id or ActionRequest(type=action_type).action_id,
+                    action_type=action_type,
+                )
             if self._last_turn_repeats(session):
                 close_reason = "repeat_detected"
                 break
@@ -1747,7 +2596,25 @@ class TownWorldEngine(WorldEngine):
         return self._close_conversation(
             session,
             close_reason,
-            action_id=action_id or ActionRequest(type="start_conversation").action_id,
+            action_id=action_id or ActionRequest(type=action_type).action_id,
+            action_type=action_type,
+        )
+
+    def talk_to(
+        self,
+        npc_id: str,
+        target_npc_id: str,
+        topic_or_reason: str = "",
+        *,
+        action_id: str | None = None,
+        action_type: str = "talk_to",
+    ) -> ActionResult:
+        return self.start_conversation(
+            npc_id,
+            target_npc_id,
+            topic_or_reason,
+            action_id=action_id,
+            action_type=action_type,
         )
 
     def interact_with(
@@ -1811,6 +2678,10 @@ class TownWorldEngine(WorldEngine):
                         _affordance_dict(affordance)
                         for affordance in obj.affordances
                     ],
+                    "suggested_affordances": _suggest_affordances(
+                        intent,
+                        obj.affordances,
+                    ),
                 },
                 action_id=action_id,
             )
@@ -1836,6 +2707,10 @@ class TownWorldEngine(WorldEngine):
                 "object_id": object_id,
                 "location_id": location.id,
                 "intent": intent,
+                "matched_affordances": [
+                    _affordance_dict(affordance)
+                    for affordance in _matching_affordances(intent, obj.affordances)
+                ],
                 "event_id": event.id,
             },
             duration_minutes=DEFAULT_INTERACT_MINUTES,
@@ -1877,12 +2752,16 @@ class TownWorldEngine(WorldEngine):
                 },
                 action_id=action_id,
             )
-        affordances = target["affordances"]
+        affordances = cast(list[SemanticAffordance], target["affordances"])
+        requested_affordance_id = affordance_id
+        normalized_affordance_id = _normalize_match_text(affordance_id)
         affordance = next(
             (
                 item
                 for item in affordances
-                if item.id == affordance_id or affordance_id in item.aliases
+                if _normalize_match_text(item.id) == normalized_affordance_id
+                or normalized_affordance_id
+                in {_normalize_match_text(alias) for alias in item.aliases}
             ),
             None,
         )
@@ -1894,11 +2773,15 @@ class TownWorldEngine(WorldEngine):
                 {
                     "npc_id": npc_id,
                     "target_id": target_id,
-                    "affordance_id": affordance_id,
+                    "affordance_id": requested_affordance_id,
                     "location_id": location.id,
                     "available_affordances": [
                         _affordance_dict(item) for item in affordances
                     ],
+                    "suggested_affordances": _suggest_affordances(
+                        requested_affordance_id,
+                        affordances,
+                    ),
                 },
                 action_id=action_id,
             )
@@ -1930,7 +2813,10 @@ class TownWorldEngine(WorldEngine):
                 "target_id": target_id,
                 "target_kind": target_kind,
                 "affordance_id": affordance.id,
+                "requested_affordance_id": requested_affordance_id,
                 "affordance_label": affordance.label,
+                "affordance_aliases": list(affordance.aliases),
+                "event_type": affordance.event_type,
                 "location_id": location.id,
                 "note": summary_note,
                 "event_id": event.id,
@@ -1970,23 +2856,103 @@ class TownWorldEngine(WorldEngine):
         self._record_action_result(npc_id, result)
         return result
 
+    def interrupt_current_action(
+        self,
+        npc_id: str,
+        reason: str,
+        *,
+        minute: int | None = None,
+    ) -> dict[str, object] | None:
+        action = self.state.current_action_for(npc_id)
+        if action is None:
+            return None
+        interrupted_minute = self.state.clock.minute if minute is None else minute
+        action.lifecycle_state = "interrupted"
+        action.interrupted_reason = reason
+        action.finalized_minute = interrupted_minute
+        self.state.clear_current_action(npc_id)
+        evidence = self._finalized_action_dict(action, at_minute=interrupted_minute)
+        evidence["lifecycle_state"] = "interrupted"
+        self.action_log.append(
+            {
+                "day": self.state.clock.day,
+                "time": _minute_label(interrupted_minute),
+                "minute": interrupted_minute,
+                "end_minute": action.end_minute,
+                "npc_id": npc_id,
+                "action_type": action.action_type,
+                "status": action.status,
+                "lifecycle_state": "interrupted",
+                "effect_model": action.effect_model,
+                "occupancy_model": action.occupancy_model,
+                "effect_applied": action.effect_applied,
+                "failure_reason": action.failure_reason,
+                "interrupted_reason": reason,
+                "next_available_minute": interrupted_minute,
+                "location_id": action.location_id,
+                "summary": action.summary,
+                "facts": evidence,
+            }
+        )
+        return evidence
+
     def finish_schedule_segment(
         self,
         npc_id: str,
         note: str = "",
         *,
         action_id: str | None = None,
+        action_type: str = "finish_schedule_segment",
     ) -> ActionResult:
-        segment = self.state.current_schedule_segment(npc_id)
-        completion = self.state.complete_schedule_segment(npc_id, segment, note)
-        if segment is None or completion is None:
+        return self.complete_current_schedule(
+            npc_id,
+            note,
+            action_id=action_id,
+            action_type=action_type,
+        )
+
+    def complete_current_schedule(
+        self,
+        npc_id: str,
+        note: str = "",
+        *,
+        action_id: str | None = None,
+        action_type: str = "complete_current_schedule",
+    ) -> ActionResult:
+        segment = self.state.current_schedule_segment(npc_id) or self._recoverable_overdue_segment(npc_id)
+        if segment is None:
             return self._failed_action(
-                "finish_schedule_segment",
+                action_type,
                 "no_current_schedule_segment",
                 f"{npc_id} 当前没有可完成的日程段。",
                 {"npc_id": npc_id, "clock_minute": self.state.clock.minute},
                 action_id=action_id,
             )
+        accepted, completion_reason = self._explicit_completion_acceptance_reason(
+            npc_id,
+            segment,
+        )
+        if not accepted:
+            return self._failed_action(
+                action_type,
+                completion_reason,
+                f"{npc_id} 当前日程段缺少完成证据，不能标记完成。",
+                {
+                    "npc_id": npc_id,
+                    "clock_minute": self.state.clock.minute,
+                    "segment_start_minute": segment.start_minute,
+                    "location_id": segment.location_id,
+                    "current_location_id": self.state.location_id_for(npc_id),
+                },
+                action_id=action_id,
+            )
+        completion = self._record_schedule_completion(
+            npc_id,
+            segment,
+            note=note,
+            completion_type="explicit_request",
+            matching_reason=completion_reason,
+        )
         self._record_reflection_evidence(
             npc_id,
             evidence_type="schedule",
@@ -2004,8 +2970,8 @@ class TownWorldEngine(WorldEngine):
         )
         result = self._timed_result(
             npc_id,
-            action_id=action_id or ActionRequest(type="finish_schedule_segment").action_id,
-            action_type="finish_schedule_segment",
+            action_id=action_id or ActionRequest(type=action_type).action_id,
+            action_type=action_type,
             status="succeeded",
             observation=(
                 f"{npc_id} 已完成 {_minute_label(segment.start_minute)} 开始、"
@@ -2016,8 +2982,11 @@ class TownWorldEngine(WorldEngine):
                 "segment_start_minute": segment.start_minute,
                 "location_id": segment.location_id,
                 "note": completion.note,
+                "completion_type": completion.completion_type,
+                "completion_reason": completion_reason,
             },
             duration_minutes=0,
+            occupancy_model="instant_free",
         )
         self._record_action_result(npc_id, result)
         return result
@@ -2031,7 +3000,7 @@ class TownWorldEngine(WorldEngine):
             segment.subtasks = default_subtasks_for(segment) or [
                 "到达目标地点",
                 "执行与目标直接相关的行动",
-                "目标满足后调用 finish_schedule_segment",
+                "避免重复已满足行动",
             ]
             self._record_planning_checkpoint(
                 npc_id,
@@ -2159,6 +3128,7 @@ class TownWorldEngine(WorldEngine):
                     location_id=segment.location_id,
                     intent=segment.intent,
                     subtasks=list(segment.subtasks),
+                    completion_tags=list(segment.completion_tags),
                 )
                 revised.append(shifted)
                 next_free_minute = shifted.end_minute
@@ -2504,6 +3474,211 @@ class TownWorldEngine(WorldEngine):
         resident.poignancy += poignancy
         return evidence
 
+    def _finalize_due_current_actions(
+        self,
+        npc_ids: list[str],
+        *,
+        at_minute: int,
+    ) -> list[dict[str, object]]:
+        finalized: list[dict[str, object]] = []
+        for npc_id in npc_ids:
+            action = self.state.current_action_for(npc_id)
+            if action is None or action.end_minute > at_minute:
+                continue
+            action.lifecycle_state = "finalized"
+            action.finalized_minute = at_minute
+            self.state.clear_current_action(npc_id)
+            finalized_action = self._finalized_action_dict(action, at_minute=at_minute)
+            completion = self._infer_schedule_completion_from_finalized_action(
+                npc_id,
+                finalized_action,
+                at_minute=at_minute,
+            )
+            if completion is not None:
+                finalized_action["schedule_completion"] = _schedule_completion_dict(completion)
+            finalized.append(finalized_action)
+        return finalized
+
+    def _finalized_action_dict(
+        self,
+        action: CurrentAction,
+        *,
+        at_minute: int,
+    ) -> dict[str, object]:
+        return {
+            "npc_id": action.npc_id,
+            "action_type": action.action_type,
+            "location_id": action.location_id,
+            "start_minute": action.start_minute,
+            "duration_minutes": action.duration_minutes,
+            "end_minute": action.end_minute,
+            "finalized_minute": at_minute,
+            "status": action.metadata.get("result_status", action.status),
+            "submitted_status": action.status,
+            "lifecycle_state": action.lifecycle_state,
+            "effect_model": action.effect_model,
+            "occupancy_model": action.occupancy_model,
+            "effect_applied": action.effect_applied,
+            "failure_reason": action.failure_reason,
+            "interrupted_reason": action.interrupted_reason,
+            "summary": action.summary,
+            "action_id": action.metadata.get("action_id"),
+            "facts": dict(action.metadata.get("facts", {}))
+            if isinstance(action.metadata.get("facts"), dict)
+            else {},
+        }
+
+    def _current_action_lifecycle_snapshot(
+        self,
+        npc_ids: list[str],
+    ) -> dict[str, dict[str, object]]:
+        snapshot: dict[str, dict[str, object]] = {}
+        for npc_id in npc_ids:
+            action = self.state.current_action_for(npc_id)
+            if action is None:
+                snapshot[npc_id] = {"lifecycle_state": "idle"}
+                continue
+            snapshot[npc_id] = {
+                "action_type": action.action_type,
+                "start_minute": action.start_minute,
+                "duration_minutes": action.duration_minutes,
+                "end_minute": action.end_minute,
+                "status": action.status,
+                "lifecycle_state": action.lifecycle_state,
+                "effect_model": action.effect_model,
+                "occupancy_model": action.occupancy_model,
+                "effect_applied": action.effect_applied,
+                "failure_reason": action.failure_reason,
+                "interrupted_reason": action.interrupted_reason,
+            }
+        return snapshot
+
+    def schedule_segment_state(
+        self,
+        npc_id: str,
+        segment: ScheduleSegment,
+        *,
+        minute: int | None = None,
+        day_end_reached: bool = False,
+    ) -> dict[str, object]:
+        check_minute = self.state.clock.minute if minute is None else minute
+        completed = self.state.is_schedule_segment_complete(npc_id, segment)
+        flags: set[str] = set()
+        if _schedule_is_fallback(segment):
+            flags.add("fallback")
+        if self._segment_has_revision_evidence(npc_id, segment):
+            flags.add("revised")
+        if self._segment_has_drift_evidence(npc_id, segment):
+            flags.add("drifted")
+        if self._segment_has_interruption_evidence(npc_id, segment):
+            flags.add("interrupted")
+
+        if completed:
+            base_status = "completed"
+        elif self.state.is_schedule_segment_satisfied(npc_id, segment):
+            if segment.completion_policy == "occupy_until_segment_end" and check_minute < segment.end_minute:
+                base_status = "satisfied_in_progress"
+            else:
+                base_status = "active" if segment.contains(check_minute) else "pending"
+        elif day_end_reached and segment.end_minute <= check_minute:
+            base_status = "missed"
+            if check_minute >= segment.end_minute:
+                flags.add("overdue")
+        elif segment.start_minute <= check_minute < segment.end_minute:
+            base_status = "active"
+        elif check_minute >= segment.end_minute:
+            base_status = "pending"
+            flags.add("overdue")
+        else:
+            base_status = "pending"
+
+        return {
+            "npc_id": npc_id,
+            "day": self.state.clock.day if segment.day is None else segment.day,
+            "segment_start_minute": segment.start_minute,
+            "segment_end_minute": segment.end_minute,
+            "location_id": segment.location_id,
+            "intent": segment.intent,
+            "base_status": base_status,
+            "flags": sorted(flags),
+            "completed": completed,
+            "satisfied": self.state.is_schedule_segment_satisfied(npc_id, segment),
+            "active": base_status == "active",
+            "satisfied_in_progress": base_status == "satisfied_in_progress",
+            "overdue": "overdue" in flags,
+            "missed": base_status == "missed",
+            "fallback": "fallback" in flags,
+            "revised": "revised" in flags,
+            "drifted": "drifted" in flags,
+            "interrupted": "interrupted" in flags,
+        }
+
+    def _record_due_schedule_evidence(
+        self,
+        npc_ids: list[str],
+        *,
+        at_minute: int,
+    ) -> list[dict[str, object]]:
+        evidence: list[dict[str, object]] = []
+        for npc_id in npc_ids:
+            for segment in self.state.schedule_for(npc_id):
+                if segment.end_minute > at_minute:
+                    continue
+                satisfaction = self.state.schedule_segment_satisfaction(npc_id, segment)
+                if (
+                    satisfaction is not None
+                    and not self.state.is_schedule_segment_complete(npc_id, segment)
+                    and segment.completion_policy == "occupy_until_segment_end"
+                ):
+                    completion = self._record_schedule_completion(
+                        npc_id,
+                        segment,
+                        note="automatic completion after satisfied sustained segment reached end minute",
+                        completion_type="automatic_action_match",
+                        matched_action_id=satisfaction.matched_action_id,
+                        matched_action_type=satisfaction.matched_action_type,
+                        matching_reason=satisfaction.matching_reason,
+                        completion_policy=segment.completion_policy,
+                        action_end_minute=satisfaction.action_end_minute,
+                        completion_reason="occupy_until_segment_end:segment_end_reached",
+                    )
+                    state = self.schedule_segment_state(npc_id, segment, minute=at_minute)
+                    self._record_planning_checkpoint(
+                        npc_id,
+                        day=int(state["day"]),
+                        stage="schedule_completion_automatic",
+                        payload={
+                            "completion": _schedule_completion_dict(completion),
+                            "segment": _full_schedule_dict(segment),
+                            "satisfaction": _schedule_satisfaction_dict(satisfaction),
+                            "reason": "occupy_until_segment_end:segment_end_reached",
+                        },
+                    )
+                    evidence.append(state)
+                    continue
+                state = self.schedule_segment_state(npc_id, segment, minute=at_minute)
+                if not state["overdue"] or state["completed"]:
+                    continue
+                if self._has_schedule_evidence(
+                    npc_id,
+                    "schedule_overdue",
+                    segment,
+                    day=int(state["day"]),
+                ):
+                    continue
+                self._record_planning_checkpoint(
+                    npc_id,
+                    day=int(state["day"]),
+                    stage="schedule_overdue",
+                    payload={
+                        "segment": _full_schedule_dict(segment),
+                        "state": state,
+                        "current_location_id": self.state.location_id_for(npc_id),
+                    },
+                )
+                evidence.append(state)
+        return evidence
+
     def step(  # type: ignore[override]
         self,
         agent: TownAgent,
@@ -2513,6 +3688,19 @@ class TownWorldEngine(WorldEngine):
         active_npcs = self.npc_registry.active_ids(npc_ids)
         tick = len(self.replay_log) + 1
         tick_start_minute = self.state.clock.minute
+        finalized_actions = self._finalize_due_current_actions(
+            active_npcs,
+            at_minute=tick_start_minute,
+        )
+        overdue_schedule_evidence = self._record_due_schedule_evidence(
+            active_npcs,
+            at_minute=tick_start_minute,
+        )
+        finalized_by_npc = {
+            str(item["npc_id"]): item
+            for item in finalized_actions
+            if isinstance(item.get("npc_id"), str)
+        }
         input_order = {npc_id: index for index, npc_id in enumerate(active_npcs)}
         next_available = {
             npc_id: self._next_available_minute(npc_id, at_minute=tick_start_minute)
@@ -2523,7 +3711,12 @@ class TownWorldEngine(WorldEngine):
             for npc_id in active_npcs
             if next_available[npc_id] <= tick_start_minute
         ]
-        ready_npcs.sort(key=lambda npc_id: (next_available[npc_id], input_order[npc_id]))
+        ready_npcs.sort(
+            key=lambda npc_id: (
+                int(finalized_by_npc.get(npc_id, {}).get("end_minute", next_available[npc_id])),
+                input_order[npc_id],
+            )
+        )
         visible_event_limit = len(self.state.events)
         inbox_snapshot = {npc_id: self.event_bus.drain(npc_id) for npc_id in ready_npcs}
 
@@ -2541,10 +3734,7 @@ class TownWorldEngine(WorldEngine):
                 before_actions = len(self.action_log)
                 context = self.build_context(npc_id, event)
                 response = agent.run(context)
-                action_results = [
-                    self.execute_action(npc_id, action).model_dump()
-                    for action in response.actions
-                ]
+                action_results = [status.model_dump() for status in response.tool_statuses]
                 self.handle_response(npc_id, response)
                 records.append(
                     {
@@ -2562,22 +3752,37 @@ class TownWorldEngine(WorldEngine):
             self._visible_event_count_limit = None
             self._active_step_agent = previous_agent
 
+        ran_npc_ids = [str(record["npc_id"]) for record in records]
+        skipped_npc_ids = [
+            npc_id
+            for npc_id in active_npcs
+            if npc_id not in {str(record["npc_id"]) for record in records}
+        ]
+        skipped_reasons = {
+            npc_id: self._skip_reason(
+                npc_id,
+                at_minute=tick_start_minute,
+                next_available=next_available.get(npc_id, tick_start_minute),
+            )
+            for npc_id in skipped_npc_ids
+        }
         self.replay_log.append(
             {
                 "tick": tick,
                 "time": _minute_label(tick_start_minute),
                 "minute": tick_start_minute,
-                "ran_npc_ids": [str(record["npc_id"]) for record in records],
-                "skipped_npc_ids": [
-                    npc_id
-                    for npc_id in active_npcs
-                    if npc_id not in {str(record["npc_id"]) for record in records}
-                ],
+                "ran_npc_ids": ran_npc_ids,
+                "skipped_npc_ids": skipped_npc_ids,
+                "skipped_reasons": skipped_reasons,
                 "next_available_minutes": next_available,
+                "finalized_actions": finalized_actions,
+                "schedule_evidence": overdue_schedule_evidence,
+                "current_action_lifecycle": self._current_action_lifecycle_snapshot(active_npcs),
                 "records": records,
                 "snapshot": self.build_replay_snapshot(
                     active_npcs,
                     minute=tick_start_minute,
+                    finalized_actions=finalized_actions,
                 ),
             }
         )
@@ -2646,7 +3851,6 @@ class TownWorldEngine(WorldEngine):
         )
         context = self.build_context(speaker_id, event)
         context.tools = []
-        context.graph_id = AgentGraphID.DIALOGUE_MEMORY_THEN_OUTPUT
         context.route = AgentRoute.DIALOGUE
         context.world_rules = (
             "你正在参与一段由 TownWorldEngine 托管的 NPC-NPC 会话。"
@@ -2687,6 +3891,7 @@ class TownWorldEngine(WorldEngine):
         close_reason: str,
         *,
         action_id: str,
+        action_type: str = "start_conversation",
     ) -> ActionResult:
         session.status = "closed"
         session.close_reason = close_reason
@@ -2800,12 +4005,17 @@ class TownWorldEngine(WorldEngine):
                     duration_minutes=duration_minutes,
                     status="conversation",
                     summary=summary,
+                    lifecycle_state="in_progress",
+                    effect_model="immediate_effect",
+                    occupancy_model="duration_occupied",
+                    effect_applied=True,
+                    metadata={"conversation_session_id": session.id},
                 ),
             )
 
         result = ActionResult(
             action_id=action_id,
-            action_type="start_conversation",
+            action_type=action_type,
             status="succeeded",
             observation=summary,
             facts={
@@ -2830,7 +4040,69 @@ class TownWorldEngine(WorldEngine):
                 "start_time": _minute_label(session.started_minute),
                 "end_time": _minute_label(session.ended_minute),
                 "cooldown_until_minute": cooldown_until,
+                "lifecycle_state": "in_progress",
+                "effect_model": "immediate_effect",
+                "occupancy_model": "duration_occupied",
+                "effect_applied": True,
             },
+        )
+        self._record_action_result(session.initiator_id, result)
+        return result
+
+    def _fail_empty_conversation(
+        self,
+        session: ConversationSession,
+        *,
+        action_id: str,
+        action_type: str,
+    ) -> ActionResult:
+        session.status = "closed"
+        session.close_reason = "empty_conversation"
+        session.ended_minute = session.started_minute
+        result = ActionResult(
+            action_id=action_id,
+            action_type=action_type,
+            status="failed",
+            reason="empty_conversation",
+            observation=(
+                f"{session.initiator_id} 和 "
+                f"{next(p for p in session.participants if p != session.initiator_id)} "
+                "没有形成有效对话。"
+            ),
+            facts={
+                "conversation_session_id": session.id,
+                "participants": list(session.participants),
+                "location_id": session.location_id,
+                "topic_or_reason": session.topic,
+                "turn_count": len(session.turns),
+                "close_reason": "empty_conversation",
+                "transcript": [
+                    {
+                        "speaker_id": turn.speaker_id,
+                        "listener_id": turn.listener_id,
+                        "text": turn.text,
+                        "minute": turn.minute,
+                    }
+                    for turn in session.turns
+                ],
+                "start_minute": session.started_minute,
+                "duration_minutes": DEFAULT_FAILED_ACTION_MINUTES,
+                "end_minute": session.started_minute + DEFAULT_FAILED_ACTION_MINUTES,
+                "start_time": _minute_label(session.started_minute),
+                "end_time": _minute_label(session.started_minute + DEFAULT_FAILED_ACTION_MINUTES),
+                "lifecycle_state": "failed",
+                "effect_model": "immediate_effect",
+                "occupancy_model": "duration_occupied",
+                "effect_applied": False,
+            },
+        )
+        self._record_current_action(
+            session.initiator_id,
+            result,
+            start_minute=session.started_minute,
+            duration_minutes=DEFAULT_FAILED_ACTION_MINUTES,
+            effect_model="immediate_effect",
+            occupancy_model="duration_occupied",
         )
         self._record_action_result(session.initiator_id, result)
         return result
@@ -3000,7 +4272,7 @@ class TownWorldEngine(WorldEngine):
 
     def _conversation_unresolved_topics(self, session: ConversationSession) -> list[str]:
         topics: list[str] = []
-        if session.close_reason in {"max_turns", "repeat_detected", "empty_turn"}:
+        if session.close_reason in {"max_turns", "repeat_detected", "empty_conversation"}:
             topics.append(session.topic or "继续完成上次未收束的对话")
         question_lines = [
             turn.text
@@ -3085,6 +4357,13 @@ class TownWorldEngine(WorldEngine):
             "start_time": _minute_label(action.start_minute),
             "end_time": _minute_label(action.end_minute),
             "status": action.status,
+            "lifecycle_state": action.lifecycle_state,
+            "effect_model": action.effect_model,
+            "occupancy_model": action.occupancy_model,
+            "effect_applied": action.effect_applied,
+            "failure_reason": action.failure_reason,
+            "interrupted_reason": action.interrupted_reason,
+            "finalized_minute": action.finalized_minute,
             "summary": action.summary,
         }
 
@@ -3106,6 +4385,31 @@ class TownWorldEngine(WorldEngine):
             "day_plan": _resident_day_plan_dict(day_plan),
             "current_action": current_action,
             "current_schedule": _schedule_dict(current_schedule),
+            "schedule": [
+                {
+                    **_full_schedule_dict(segment),
+                    "completed": self.state.is_schedule_segment_complete(npc_id, segment),
+                    "state": self.schedule_segment_state(npc_id, segment, minute=minute),
+                }
+                for segment in self.state.schedule_for(npc_id)
+            ],
+            "completed_schedule_segments": [
+                {
+                    "day": item.day,
+                    "start_minute": item.start_minute,
+                    "location_id": item.location_id,
+                    "note": item.note,
+                    "completion_type": item.completion_type,
+                    "matched_action_id": item.matched_action_id,
+                    "matched_action_type": item.matched_action_type,
+                    "matching_reason": item.matching_reason,
+                }
+                for item in self.state.completed_schedule_segments.get(npc_id, [])
+            ],
+            "satisfied_schedule_segments": [
+                _schedule_satisfaction_dict(item)
+                for item in self.state.satisfied_schedule_segments.get(npc_id, [])
+            ],
             "schedule_completed": (
                 self.state.is_schedule_segment_complete(npc_id, current_schedule)
                 if current_schedule is not None
@@ -3150,9 +4454,13 @@ class TownWorldEngine(WorldEngine):
         progress_summary: str,
     ) -> str:
         if schedule is None:
-            return "当前没有日程段，不要调用 finish_schedule_segment。"
+            return "当前没有日程段；根据本地事件选择具体行动或等待。"
         if self.state.is_schedule_segment_complete(npc_id, schedule):
             return "当前日程段已经完成；除非有待处理直接事件，不需要继续行动。"
+        if schedule.completion_policy == "explicit":
+            return "当前日程段使用 explicit policy；证据充分、被阻塞或无法继续时可调用 complete_current_schedule。"
+        if self.state.is_schedule_segment_satisfied(npc_id, schedule):
+            return "当前日程段已有最终行动满足证据；避免重复同类行动，等待引擎按策略推进。"
 
         successful_actions: list[dict[str, object]] = []
         for item in self.action_log:
@@ -3176,23 +4484,18 @@ class TownWorldEngine(WorldEngine):
         if any(word in intent for word in ("准备", "整理")) and action_count >= 3:
             return (
                 f"你已经为“{intent}”完成多次相关行动。"
-                "如果柜台/书车/相关对象已经处理到位，应优先调用 "
-                "finish_schedule_segment，而不是继续重复同类交互。"
+                "如果柜台/书车/相关对象已经处理到位，不要继续重复同类交互。"
             )
         if any(word in intent for word in ("吃", "买", "取", "送")) and action_count >= 1:
             return (
                 f"你已经执行过与“{intent}”直接相关的行动。"
-                "如果物品已取得、交易已完成或需求已满足，应调用 "
-                "finish_schedule_segment。"
+                "如果物品已取得、交易已完成或需求已满足，不要继续重复同类交互。"
             )
         if remaining <= self.state.clock.stride_minutes:
-            return (
-                "当前日程即将结束；如果目标已经基本满足，应立即调用 "
-                "finish_schedule_segment。"
-            )
+            return "当前日程即将结束；选择最直接的具体行动或短暂等待引擎推进。"
         return (
             progress_summary
-            + "。继续行动前先判断目标是否已经满足；满足则调用 finish_schedule_segment。"
+            + "。继续行动前检查语义是否重复；普通日程由最终行动证据自动推进。"
         )
 
     def _validate_and_repair_schedule(
@@ -3232,6 +4535,7 @@ class TownWorldEngine(WorldEngine):
                     location_id=location_id,
                     intent=raw.intent or "处理当天事项",
                     subtasks=list(raw.subtasks),
+                    completion_tags=list(raw.completion_tags),
                     day=day,
                 )
             )
@@ -3258,11 +4562,151 @@ class TownWorldEngine(WorldEngine):
             end_minute=end_minute,
             fallback_location=fallback_location,
         )
+        if start_minute == 0 and end_minute >= 24 * 60:
+            repaired = self._repair_full_day_lifecycle_schedule(
+                npc_id,
+                repaired,
+                warnings=warnings,
+                day=day,
+                start_minute=start_minute,
+                end_minute=end_minute,
+            )
         return repaired, {
             "ok": not warnings,
             "warnings": warnings,
             "segment_count": len(repaired),
         }
+
+    def _repair_full_day_lifecycle_schedule(
+        self,
+        npc_id: str,
+        schedule: list[ScheduleSegment],
+        *,
+        warnings: list[str],
+        day: int,
+        start_minute: int,
+        end_minute: int,
+    ) -> list[ScheduleSegment]:
+        resident = self.state.residents[npc_id]
+        sleep_location = resident.sleep_location_id or resident.home_location_id
+        if not sleep_location or sleep_location not in self.state.locations:
+            warnings.append("missing_home_or_sleep_location")
+            return schedule
+        repaired = sorted(schedule, key=lambda item: item.start_minute)
+        if not any(self._is_sleep_or_rest_segment(npc_id, segment) for segment in repaired):
+            warnings.append("missing_sleep_segment_repaired")
+            sleep_start = (
+                resident.default_sleep_window[0]
+                if resident.default_sleep_window is not None
+                else max(start_minute, end_minute - 120)
+            )
+            repaired.append(
+                ScheduleSegment(
+                    npc_id=npc_id,
+                    start_minute=max(start_minute, min(sleep_start, end_minute - 60)),
+                    duration_minutes=max(1, end_minute - max(start_minute, min(sleep_start, end_minute - 60))),
+                    location_id=sleep_location,
+                    intent="回家休息并睡觉",
+                    subtasks=["lifecycle:sleep", "repair:missing_sleep"],
+                    day=day,
+                )
+            )
+        repaired = sorted(repaired, key=lambda item: item.start_minute)
+        first = repaired[0]
+        wake = (
+            resident.default_wake_window[0]
+            if resident.default_wake_window is not None
+            else DEFAULT_DAY_START_MINUTE
+        )
+        if first.start_minute > start_minute:
+            warnings.append("pre_wake_sleep_segment_repaired")
+            repaired.insert(
+                0,
+                ScheduleSegment(
+                    npc_id=npc_id,
+                    start_minute=start_minute,
+                    duration_minutes=max(1, min(first.start_minute, wake) - start_minute),
+                    location_id=sleep_location,
+                    intent="睡觉直到起床",
+                    subtasks=["lifecycle:sleep", "repair:pre_wake_sleep"],
+                    day=day,
+                ),
+            )
+        final_sleep = max(
+            (segment for segment in repaired if self._is_sleep_or_rest_segment(npc_id, segment)),
+            key=lambda item: item.start_minute,
+        )
+        before_sleep = [
+            segment for segment in repaired if segment.end_minute <= final_sleep.start_minute
+        ]
+        previous_location = before_sleep[-1].location_id if before_sleep else sleep_location
+        if previous_location != sleep_location:
+            travel = self._shortest_travel_minutes(previous_location, sleep_location)
+            if travel is None:
+                warnings.append("return_home_unreachable")
+            elif final_sleep.start_minute < end_minute and final_sleep.start_minute - travel >= start_minute:
+                return_start = final_sleep.start_minute - travel
+                if not any(
+                    segment.location_id == sleep_location
+                    and segment.end_minute <= final_sleep.start_minute
+                    and segment.start_minute >= return_start
+                    for segment in repaired
+                ):
+                    warnings.append("return_home_segment_repaired")
+                    repaired.append(
+                        ScheduleSegment(
+                            npc_id=npc_id,
+                            start_minute=return_start,
+                            duration_minutes=max(1, travel),
+                            location_id=sleep_location,
+                            intent="返回家中准备睡觉",
+                            subtasks=["lifecycle:return_home", "repair:return_home"],
+                            day=day,
+                        )
+                    )
+        return self._normalize_repaired_schedule(npc_id, repaired, day=day, start_minute=start_minute, end_minute=end_minute)
+
+    def _normalize_repaired_schedule(
+        self,
+        npc_id: str,
+        schedule: list[ScheduleSegment],
+        *,
+        day: int,
+        start_minute: int,
+        end_minute: int,
+    ) -> list[ScheduleSegment]:
+        normalized: list[ScheduleSegment] = []
+        next_start = start_minute
+        for raw in sorted(schedule, key=lambda item: item.start_minute):
+            segment_start = max(start_minute, raw.start_minute, next_start)
+            if segment_start >= end_minute:
+                continue
+            duration = max(1, min(raw.duration_minutes, end_minute - segment_start))
+            normalized.append(
+                ScheduleSegment(
+                    npc_id=npc_id,
+                    start_minute=segment_start,
+                    duration_minutes=duration,
+                    location_id=raw.location_id,
+                    intent=raw.intent,
+                    subtasks=list(raw.subtasks),
+                    completion_tags=list(raw.completion_tags),
+                    day=day,
+                )
+            )
+            next_start = segment_start + duration
+        return normalized
+
+    def _is_sleep_or_rest_segment(self, npc_id: str, segment: ScheduleSegment) -> bool:
+        resident = self.state.residents[npc_id]
+        lifecycle_location = segment.location_id in {
+            resident.home_location_id,
+            resident.sleep_location_id,
+        }
+        text = f"{segment.intent} {' '.join(segment.subtasks)}".lower()
+        return lifecycle_location and any(
+            token in text for token in ("sleep", "rest", "睡", "休息", "入睡")
+        )
 
     def _repair_first_segment_reachability(
         self,
@@ -3292,6 +4736,7 @@ class TownWorldEngine(WorldEngine):
                     location_id=current_location_id,
                     intent=f"从当前位置过渡：{first.intent}",
                     subtasks=list(first.subtasks),
+                    completion_tags=list(first.completion_tags),
                     day=day,
                 ),
                 *[
@@ -3333,6 +4778,7 @@ class TownWorldEngine(WorldEngine):
                     location_id=raw.location_id,
                     intent=raw.intent,
                     subtasks=list(raw.subtasks),
+                    completion_tags=list(raw.completion_tags),
                     day=day,
                 )
             )
@@ -3375,6 +4821,48 @@ class TownWorldEngine(WorldEngine):
                     frontier.append((next_travel, exit_id))
         return None
 
+    def _shortest_route(self, origin_id: str, destination_id: str) -> list[str] | None:
+        if origin_id == destination_id:
+            return [origin_id]
+        if origin_id not in self.state.locations or destination_id not in self.state.locations:
+            return None
+        frontier: list[tuple[int, str, list[str]]] = [(0, origin_id, [origin_id])]
+        best: dict[str, int] = {origin_id: 0}
+        while frontier:
+            frontier.sort(key=lambda item: (item[0], item[1]))
+            travel_so_far, location_id, route = frontier.pop(0)
+            if location_id == destination_id:
+                return route
+            location = self.state.locations.get(location_id)
+            if location is None:
+                continue
+            for exit_id in location.exits:
+                if exit_id not in self.state.locations:
+                    continue
+                next_travel = travel_so_far + location.exit_travel_minutes.get(
+                    exit_id,
+                    DEFAULT_MOVE_MINUTES,
+                )
+                if next_travel < best.get(exit_id, 10**9):
+                    best[exit_id] = next_travel
+                    frontier.append((next_travel, exit_id, [*route, exit_id]))
+        return None
+
+    def _resolve_move_destination(
+        self,
+        npc_id: str,
+        requested_destination_id: str,
+    ) -> tuple[str | None, list[str] | None]:
+        location = self.state.location_for(npc_id)
+        if location is None or requested_destination_id not in self.state.locations:
+            return requested_destination_id, None
+        if requested_destination_id in location.exits or requested_destination_id == location.id:
+            return requested_destination_id, [location.id, requested_destination_id]
+        route = self._shortest_route(location.id, requested_destination_id)
+        if route is None or len(route) < 2:
+            return requested_destination_id, route
+        return route[1], route
+
     def _assert_schedule_valid(
         self,
         npc_id: str,
@@ -3391,6 +4879,84 @@ class TownWorldEngine(WorldEngine):
             if previous is not None and previous.end_minute > segment.start_minute:
                 raise ValueError("overlapping_schedule_segments")
             previous = segment
+
+    def _schedule_is_valid(
+        self,
+        npc_id: str,
+        schedule: list[ScheduleSegment],
+    ) -> bool:
+        try:
+            self._assert_schedule_valid(npc_id, schedule)
+        except ValueError:
+            return False
+        return True
+
+    def _recoverable_overdue_segment(self, npc_id: str) -> ScheduleSegment | None:
+        overdue = [
+            segment
+            for segment in self.state.schedule_for(npc_id)
+            if segment.end_minute <= self.state.clock.minute
+            and not self.state.is_schedule_segment_complete(npc_id, segment)
+        ]
+        if not overdue:
+            return None
+        return max(overdue, key=lambda segment: segment.end_minute)
+
+    def _segment_has_revision_evidence(
+        self,
+        npc_id: str,
+        segment: ScheduleSegment,
+    ) -> bool:
+        return any(
+            item.get("npc_id") == npc_id
+            and item.get("stage") == "schedule_revision"
+            and _revision_mentions_segment(item, segment)
+            for item in self.planning_log
+        )
+
+    def _segment_has_drift_evidence(
+        self,
+        npc_id: str,
+        segment: ScheduleSegment,
+    ) -> bool:
+        return any(
+            item.get("npc_id") == npc_id
+            and item.get("guard_type") == "schedule_drift"
+            and item.get("details", {}).get("segment_start_minute")
+            == segment.start_minute
+            for item in self.loop_guard_events
+            if isinstance(item.get("details"), dict)
+        )
+
+    def _segment_has_interruption_evidence(
+        self,
+        npc_id: str,
+        segment: ScheduleSegment,
+    ) -> bool:
+        return any(
+            item.get("npc_id") == npc_id
+            and item.get("lifecycle_state") == "interrupted"
+            and _interruption_overlaps_segment(item, segment)
+            for item in self.action_log
+        )
+
+    def _has_schedule_evidence(
+        self,
+        npc_id: str,
+        stage: str,
+        segment: ScheduleSegment,
+        *,
+        day: int,
+    ) -> bool:
+        return any(
+            item.get("npc_id") == npc_id
+            and item.get("day") == day
+            and item.get("stage") == stage
+            and isinstance(item.get("segment"), dict)
+            and item["segment"].get("start_minute") == segment.start_minute
+            and item["segment"].get("location_id") == segment.location_id
+            for item in self.planning_log
+        )
 
     def _record_planning_checkpoint(
         self,
@@ -3438,7 +5004,7 @@ class TownWorldEngine(WorldEngine):
                         {"action_type": action_type, "reasons": sorted(reasons), "target": next(iter(targets))},
                     )
             action_types = [str(item.get("action_type")) for item in last_three]
-            if len(set(action_types)) == 1 and action_types[-1] in {"wait", "speak_to", "start_conversation"}:
+            if len(set(action_types)) == 1 and action_types[-1] in {"wait", "speak_to", "start_conversation", "talk_to"}:
                 self._record_loop_guard_event(
                     npc_id,
                     "repeated_low_value_action",
@@ -3453,7 +5019,13 @@ class TownWorldEngine(WorldEngine):
             and location_id is not None
             and location_id != schedule.location_id
             and self.state.clock.minute - schedule.start_minute >= self.state.clock.stride_minutes * 3
+            and not self._schedule_drift_exempt(npc_id, schedule)
         ):
+            blacklist_evidence = self._schedule_drift_blacklist_evidence(
+                npc_id,
+                schedule,
+                location_id,
+            )
             self._record_loop_guard_event(
                 npc_id,
                 "schedule_drift",
@@ -3462,8 +5034,145 @@ class TownWorldEngine(WorldEngine):
                     "location_id": location_id,
                     "schedule_location_id": schedule.location_id,
                     "segment_start_minute": schedule.start_minute,
+                    "blacklist_evidence": blacklist_evidence,
                 },
             )
+
+    def _schedule_drift_blacklist_evidence(
+        self,
+        npc_id: str,
+        schedule: ScheduleSegment,
+        location_id: str,
+    ) -> list[dict[str, object]]:
+        evidence: list[dict[str, object]] = []
+        action = self.state.current_action_for(npc_id)
+        if action is None:
+            evidence.append(
+                {
+                    "kind": "no_current_action_away_from_goal",
+                    "location_id": location_id,
+                    "minutes_away": self.state.clock.minute - schedule.start_minute,
+                }
+            )
+        elif action.action_type == "wait" and action.location_id != schedule.location_id:
+            evidence.append(
+                {
+                    "kind": "wait_away_from_goal",
+                    "location_id": action.location_id,
+                    "action_start_minute": action.start_minute,
+                    "action_end_minute": action.end_minute,
+                }
+            )
+
+        recent_actions = [
+            item
+            for item in self.action_log
+            if item.get("npc_id") == npc_id and item.get("day") == self.state.clock.day
+        ][-LOOP_GUARD_WINDOW:]
+        away_actions = [
+            item
+            for item in recent_actions
+            if item.get("location_id") not in {None, schedule.location_id}
+        ]
+        if len(away_actions) >= 2:
+            evidence.append(
+                {
+                    "kind": "repeated_non_schedule_locations",
+                    "count": len(away_actions),
+                    "location_ids": sorted(
+                        {
+                            str(item.get("location_id"))
+                            for item in away_actions
+                            if item.get("location_id") is not None
+                        }
+                    ),
+                }
+            )
+
+        wait_away = [
+            item
+            for item in away_actions
+            if item.get("action_type") == "wait" and item.get("status") == "succeeded"
+        ]
+        if len(wait_away) >= 2:
+            evidence.append({"kind": "repeated_wait_away_from_goal", "count": len(wait_away)})
+
+        failed_moves = [
+            item
+            for item in away_actions
+            if item.get("action_type") in {"move_to", "move"}
+            and item.get("status") == "failed"
+            and self._action_destination(item) != schedule.location_id
+        ]
+        if failed_moves:
+            evidence.append(
+                {
+                    "kind": "failed_moves_not_approaching_goal",
+                    "count": len(failed_moves),
+                    "destinations": sorted(
+                        {
+                            str(destination)
+                            for item in failed_moves
+                            if (destination := self._action_destination(item)) is not None
+                        }
+                    ),
+                }
+            )
+
+        free_away = [
+            item
+            for item in self.free_action_log
+            if item.get("npc_id") == npc_id
+            and item.get("day") == self.state.clock.day
+            and item.get("location_id") != schedule.location_id
+            and item.get("action_type") in {"observe", "inspect_affordances"}
+        ][-LOOP_GUARD_WINDOW:]
+        if len(free_away) >= 2:
+            evidence.append(
+                {
+                    "kind": "repeated_free_observation_away_from_goal",
+                    "count": len(free_away),
+                    "action_types": [
+                        str(item.get("action_type"))
+                        for item in free_away
+                    ],
+                }
+            )
+        return evidence
+
+    def _action_destination(self, action_row: dict[str, object]) -> str | None:
+        facts = action_row.get("facts")
+        if not isinstance(facts, dict):
+            return None
+        destination = facts.get("destination_id", facts.get("to"))
+        return str(destination) if isinstance(destination, str) and destination else None
+
+    def _schedule_drift_exempt(
+        self,
+        npc_id: str,
+        schedule: ScheduleSegment,
+    ) -> bool:
+        action = self.state.current_action_for(npc_id)
+        if action is not None and action.end_minute > self.state.clock.minute:
+            facts = action.metadata.get("facts")
+            if isinstance(facts, dict) and facts.get("to") == schedule.location_id:
+                return True
+            if action.location_id == schedule.location_id:
+                return True
+        if self.state.active_conversation_for(npc_id) is not None:
+            return True
+        if self._inboxes.get(npc_id):
+            return True
+        if any(self._is_significant_event_for(npc_id, event) for event in self.visible_events_for(npc_id)):
+            return True
+        revision = self._latest_schedule_revision_by_npc.get(npc_id)
+        if (
+            revision is not None
+            and self.state.clock.minute - revision.inserted_segment.start_minute
+            < self.state.clock.stride_minutes
+        ):
+            return True
+        return False
 
     def _record_loop_guard_event(
         self,
@@ -3540,8 +5249,34 @@ class TownWorldEngine(WorldEngine):
     def _next_available_minute(self, npc_id: str, *, at_minute: int | None = None) -> int:
         action = self.state.current_action_for(npc_id)
         if action is None:
-            return self.state.clock.minute if at_minute is None else at_minute
+            check_minute = self.state.clock.minute if at_minute is None else at_minute
+            segment = self.state.current_schedule_segment(npc_id, minute=check_minute)
+            if (
+                segment is not None
+                and segment.completion_policy == "occupy_until_segment_end"
+                and self.state.is_schedule_segment_satisfied(npc_id, segment)
+                and not self.state.is_schedule_segment_complete(npc_id, segment)
+                and check_minute < segment.end_minute
+            ):
+                return segment.end_minute
+            return check_minute
         return action.end_minute
+
+    def _skip_reason(
+        self,
+        npc_id: str,
+        *,
+        at_minute: int,
+        next_available: int,
+    ) -> str:
+        if next_available > at_minute:
+            return "action_in_progress"
+        segment = self.state.current_schedule_segment(npc_id, at_minute)
+        if segment is None:
+            return "inactive_schedule_window"
+        if self.state.is_schedule_segment_complete(npc_id, segment):
+            return "completed_schedule"
+        return "no_visible_event"
 
     def _timed_result(
         self,
@@ -3555,9 +5290,17 @@ class TownWorldEngine(WorldEngine):
         duration_minutes: int,
         reason: str | None = None,
         current_action_status: str | None = None,
+        effect_model: str | None = None,
+        occupancy_model: str | None = None,
     ) -> ActionResult:
         start_minute = max(self.state.clock.minute, self._next_available_minute(npc_id))
         end_minute = start_minute + duration_minutes
+        resolved_effect_model = effect_model or ACTION_EFFECT_MODELS.get(
+            action_type, "immediate_effect"
+        )
+        resolved_occupancy_model = occupancy_model or ACTION_OCCUPANCY_MODELS.get(
+            action_type, "duration_occupied"
+        )
         timed_facts = {
             **facts,
             "start_minute": start_minute,
@@ -3565,6 +5308,15 @@ class TownWorldEngine(WorldEngine):
             "end_minute": end_minute,
             "start_time": _minute_label(start_minute),
             "end_time": _minute_label(end_minute),
+            "effect_model": resolved_effect_model,
+            "occupancy_model": resolved_occupancy_model,
+            "lifecycle_state": (
+                "free"
+                if resolved_occupancy_model == "instant_free"
+                else ("failed" if status == "failed" else "in_progress")
+            ),
+            "effect_applied": resolved_effect_model == "immediate_effect"
+            and status != "failed",
         }
         result = ActionResult(
             action_id=action_id,
@@ -3574,13 +5326,16 @@ class TownWorldEngine(WorldEngine):
             observation=observation,
             facts=timed_facts,
         )
-        self._record_current_action(
-            npc_id,
-            result,
-            start_minute=start_minute,
-            duration_minutes=duration_minutes,
-            current_action_status=current_action_status,
-        )
+        if resolved_occupancy_model == "duration_occupied":
+            self._record_current_action(
+                npc_id,
+                result,
+                start_minute=start_minute,
+                duration_minutes=duration_minutes,
+                current_action_status=current_action_status,
+                effect_model=resolved_effect_model,
+                occupancy_model=resolved_occupancy_model,
+            )
         return result
 
     def _record_current_action(
@@ -3591,6 +5346,8 @@ class TownWorldEngine(WorldEngine):
         start_minute: int,
         duration_minutes: int,
         current_action_status: str | None = None,
+        effect_model: str,
+        occupancy_model: str,
     ) -> None:
         location = self.state.location_for(npc_id)
         self.state.set_current_action(
@@ -3603,6 +5360,16 @@ class TownWorldEngine(WorldEngine):
                 duration_minutes=duration_minutes,
                 status=current_action_status or result.status,
                 summary=result.observation,
+                lifecycle_state="failed" if result.status == "failed" else "in_progress",
+                effect_model=effect_model,
+                occupancy_model=occupancy_model,
+                effect_applied=effect_model == "immediate_effect" and result.status != "failed",
+                failure_reason=result.reason if result.status == "failed" else None,
+                metadata={
+                    "action_id": result.action_id,
+                    "result_status": result.status,
+                    "facts": dict(result.facts),
+                },
             ),
         )
 
@@ -3621,11 +5388,24 @@ class TownWorldEngine(WorldEngine):
         result: MoveResult,
         *,
         travel_minutes: int,
+        requested_destination_id: str | None = None,
+        route: list[str] | None = None,
     ) -> ActionResult:
+        requested = requested_destination_id or result.to_location_id
+        auto_routed = bool(
+            result.ok
+            and requested is not None
+            and result.to_location_id is not None
+            and requested != result.to_location_id
+        )
         facts = {
             "npc_id": result.npc_id,
             "from": result.from_location_id,
             "to": result.to_location_id,
+            "requested_destination_id": requested,
+            "actual_destination_id": result.to_location_id,
+            "route": route or [],
+            "auto_routed": auto_routed,
             "reachable": result.reachable,
         }
         if result.ok:
@@ -3761,8 +5541,348 @@ class TownWorldEngine(WorldEngine):
                 "npc_id": npc_id,
                 "action_type": result.action_type,
                 "status": result.status,
+                "lifecycle_state": result.facts.get("lifecycle_state"),
+                "effect_model": result.facts.get("effect_model"),
+                "occupancy_model": result.facts.get("occupancy_model"),
+                "effect_applied": result.facts.get("effect_applied"),
+                "failure_reason": result.reason,
+                "next_available_minute": self._next_available_minute(npc_id),
                 "location_id": location.id if location is not None else None,
                 "summary": result.observation,
+                "facts": result.facts,
+            }
+        )
+        self._detect_loop_guards(npc_id)
+
+    def _infer_schedule_completion_from_action(self, npc_id: str, result: ActionResult) -> ScheduleCompletion | None:
+        finalized_action = {
+            "npc_id": npc_id,
+            "action_id": result.action_id,
+            "action_type": result.action_type,
+            "status": result.status,
+            "start_minute": result.facts.get("start_minute", self.state.clock.minute),
+            "end_minute": result.facts.get("end_minute"),
+            "location_id": result.facts.get("location_id") or self.state.location_id_for(npc_id),
+            "facts": dict(result.facts),
+        }
+        return self._infer_schedule_completion_from_finalized_action(
+            npc_id,
+            finalized_action,
+            at_minute=self.state.clock.minute,
+        )
+
+    def _infer_schedule_completion_from_finalized_action(
+        self,
+        npc_id: str,
+        finalized_action: dict[str, object],
+        *,
+        at_minute: int,
+    ) -> ScheduleCompletion | None:
+        result = _FinalizedActionView(finalized_action)
+        if result.status != "succeeded" or result.action_type in {
+            "complete_current_schedule",
+            "finish_schedule_segment",
+            "observe",
+        }:
+            return None
+        action_minute = result.facts.get("start_minute", self.state.clock.minute)
+        if not isinstance(action_minute, int):
+            action_minute = self.state.clock.minute
+        action_end_minute = result.facts.get("end_minute", finalized_action.get("end_minute"))
+        if not isinstance(action_end_minute, int):
+            action_end_minute = action_minute
+        if at_minute < action_end_minute:
+            return None
+        candidates = [
+            segment
+            for segment in self.state.schedule_for(npc_id)
+            if (self.state.clock.day if segment.day is None else segment.day) == self.state.clock.day
+            and not self.state.is_schedule_segment_complete(npc_id, segment)
+            and segment.completion_policy != "explicit"
+            and segment.start_minute <= action_minute < segment.end_minute
+        ]
+        if not candidates:
+            return None
+        match: tuple[ScheduleSegment, str] | None = None
+        for segment in sorted(candidates, key=lambda item: abs(item.start_minute - action_minute)):
+            reason = self._action_completion_reason(npc_id, segment, result)
+            if reason:
+                match = (segment, reason)
+                break
+        if match is None:
+            return None
+        segment, reason = match
+        satisfaction = self._record_schedule_satisfaction(
+            npc_id,
+            segment,
+            matched_action_id=result.action_id,
+            matched_action_type=result.action_type,
+            matching_reason=reason,
+            action_end_minute=action_end_minute,
+        )
+        policy = _normalize_schedule_completion_policy(segment.completion_policy)
+        if policy == "occupy_until_segment_end" and at_minute < segment.end_minute:
+            self._record_planning_checkpoint(
+                npc_id,
+                day=self.state.clock.day,
+                stage="schedule_satisfied_in_progress",
+                payload={
+                    "satisfaction": _schedule_satisfaction_dict(satisfaction),
+                    "segment": _full_schedule_dict(segment),
+                    "action_id": result.action_id,
+                    "action_type": result.action_type,
+                    "reason": reason,
+                },
+            )
+            return None
+        if policy == "min_matching_actions" and satisfaction.match_count < segment.min_matching_actions:
+            self._record_planning_checkpoint(
+                npc_id,
+                day=self.state.clock.day,
+                stage="schedule_satisfied_in_progress",
+                payload={
+                    "satisfaction": _schedule_satisfaction_dict(satisfaction),
+                    "segment": _full_schedule_dict(segment),
+                    "required_count": segment.min_matching_actions,
+                    "reason": reason,
+                },
+            )
+            return None
+        completion = self._record_schedule_completion(
+            npc_id,
+            segment,
+            note=f"inferred from {result.action_type}: {reason}",
+            completion_type="automatic_action_match",
+            matched_action_id=result.action_id,
+            matched_action_type=result.action_type,
+            matching_reason=reason,
+            action_end_minute=action_end_minute,
+            completion_policy=policy,
+            completion_reason=f"{policy}:{reason}",
+        )
+        self._record_planning_checkpoint(
+            npc_id,
+            day=self.state.clock.day,
+            stage="schedule_completion_automatic",
+            payload={
+                "completion": _schedule_completion_dict(completion),
+                "segment": _full_schedule_dict(segment),
+                "action_id": result.action_id,
+                "action_type": result.action_type,
+                "action_end_minute": action_end_minute,
+                "reason": reason,
+            },
+        )
+        return completion
+
+    def _record_schedule_completion(
+        self,
+        npc_id: str,
+        segment: ScheduleSegment,
+        *,
+        note: str,
+        completion_type: str,
+        matched_action_id: str | None = None,
+        matched_action_type: str | None = None,
+        matching_reason: str = "",
+        completion_policy: str | None = None,
+        action_end_minute: int | None = None,
+        completion_reason: str = "",
+    ) -> ScheduleCompletion:
+        normalized_type = _normalize_completion_type(completion_type)
+        normalized_policy = _normalize_schedule_completion_policy(
+            completion_policy or segment.completion_policy
+        )
+        existing = self.state.completed_schedule_segments.setdefault(npc_id, [])
+        for item in existing:
+            item_day = self.state.clock.day if item.day is None else item.day
+            segment_day = self.state.clock.day if segment.day is None else segment.day
+            if item.start_minute == segment.start_minute and item_day == segment_day:
+                item.note = note or item.note
+                item.day = segment_day
+                item.completion_type = normalized_type
+                item.matched_action_id = matched_action_id or item.matched_action_id
+                item.matched_action_type = matched_action_type or item.matched_action_type
+                item.matching_reason = matching_reason or item.matching_reason
+                item.completion_policy = normalized_policy
+                item.action_end_minute = action_end_minute or item.action_end_minute
+                item.completion_reason = completion_reason or item.completion_reason
+                return item
+        completion = ScheduleCompletion(
+            npc_id=npc_id,
+            start_minute=segment.start_minute,
+            location_id=segment.location_id,
+            note=note,
+            day=self.state.clock.day if segment.day is None else segment.day,
+            completion_type=normalized_type,
+            matched_action_id=matched_action_id,
+            matched_action_type=matched_action_type,
+            matching_reason=matching_reason,
+            completion_policy=normalized_policy,
+            action_end_minute=action_end_minute,
+            completion_reason=completion_reason or matching_reason,
+        )
+        existing.append(completion)
+        return completion
+
+    def _record_schedule_satisfaction(
+        self,
+        npc_id: str,
+        segment: ScheduleSegment,
+        *,
+        matched_action_id: str | None,
+        matched_action_type: str | None,
+        matching_reason: str,
+        action_end_minute: int | None,
+    ) -> ScheduleSatisfaction:
+        segment_day = self.state.clock.day if segment.day is None else segment.day
+        normalized_policy = _normalize_schedule_completion_policy(segment.completion_policy)
+        existing = self.state.satisfied_schedule_segments.setdefault(npc_id, [])
+        for item in existing:
+            item_day = self.state.clock.day if item.day is None else item.day
+            if item.start_minute == segment.start_minute and item_day == segment_day:
+                if matched_action_id and matched_action_id != item.matched_action_id:
+                    item.match_count += 1
+                item.completion_policy = normalized_policy
+                item.matched_action_id = matched_action_id or item.matched_action_id
+                item.matched_action_type = matched_action_type or item.matched_action_type
+                item.matching_reason = matching_reason or item.matching_reason
+                item.action_end_minute = action_end_minute or item.action_end_minute
+                return item
+        satisfaction = ScheduleSatisfaction(
+            npc_id=npc_id,
+            start_minute=segment.start_minute,
+            location_id=segment.location_id,
+            day=segment_day,
+            completion_policy=normalized_policy,
+            matched_action_id=matched_action_id,
+            matched_action_type=matched_action_type,
+            matching_reason=matching_reason,
+            action_end_minute=action_end_minute,
+            match_count=1,
+        )
+        existing.append(satisfaction)
+        return satisfaction
+
+    def _explicit_completion_acceptance_reason(
+        self,
+        npc_id: str,
+        segment: ScheduleSegment,
+    ) -> tuple[bool, str]:
+        if self.state.location_id_for(npc_id) == segment.location_id:
+            return True, "at_segment_location"
+        for action in reversed(self.action_log[-8:]):
+            if action.get("npc_id") != npc_id or action.get("status") != "succeeded":
+                continue
+            facts = action.get("facts", {})
+            if not isinstance(facts, dict):
+                continue
+            if facts.get("location_id") == segment.location_id:
+                return True, "recent_successful_action_at_segment_location"
+            if facts.get("to") == segment.location_id or facts.get("actual_destination_id") == segment.location_id:
+                return True, "recent_successful_move_to_segment_location"
+        return False, "insufficient_completion_evidence"
+
+    def _action_completion_reason(
+        self,
+        npc_id: str,
+        segment: ScheduleSegment,
+        result: ActionResult,
+    ) -> str:
+        facts = result.facts
+        if result.action_type == "move_to" and facts.get("to") == segment.location_id:
+            if _movement_intent(segment.intent):
+                return "movement_reached_segment_location"
+        action_location = facts.get("location_id") or self.state.location_id_for(npc_id)
+        if action_location != segment.location_id:
+            return ""
+        if result.action_type in {"speak_to", "start_conversation", "talk_to"}:
+            if facts.get("close_reason") in {"empty_turn", "empty_conversation"}:
+                return ""
+            haystack_parts = [
+                str(facts.get("target_npc_id", "")),
+                str(facts.get("text", "")),
+                str(facts.get("topic_or_reason", "")),
+                str(facts.get("close_reason", "")),
+            ]
+            transcript = facts.get("transcript", [])
+            if isinstance(transcript, list):
+                for turn in transcript:
+                    if isinstance(turn, dict):
+                        haystack_parts.extend(
+                            [
+                                str(turn.get("speaker_id", "")),
+                                str(turn.get("listener_id", "")),
+                                str(turn.get("text", "")),
+                            ]
+                        )
+            if segment.duration_minutes <= self.state.clock.stride_minutes * 2 and (
+                self._action_terms_match_segment(segment, haystack_parts)
+                or facts.get("close_reason") in {"natural_close", "max_turns"}
+                or result.action_type == "speak_to"
+            ):
+                return "short_event_or_conversation_segment_satisfied"
+        if result.action_type in {"interact_with", "use_affordance"}:
+            haystack_parts = [
+                str(facts.get("intent", "")),
+                str(facts.get("object_id", "")),
+                str(facts.get("target_id", "")),
+                str(facts.get("affordance_id", "")),
+                str(facts.get("affordance_label", "")),
+                str(facts.get("event_type", "")),
+                str(facts.get("note", "")),
+            ]
+            aliases = facts.get("affordance_aliases", [])
+            if isinstance(aliases, list):
+                haystack_parts.extend(str(item) for item in aliases)
+            matched_affordances = facts.get("matched_affordances", [])
+            if isinstance(matched_affordances, list):
+                for item in matched_affordances:
+                    if isinstance(item, dict):
+                        haystack_parts.extend(
+                            [
+                                str(item.get("id", "")),
+                                str(item.get("label", "")),
+                                str(item.get("description", "")),
+                                str(item.get("event_type", "")),
+                                " ".join(str(alias) for alias in item.get("aliases", []))
+                                if isinstance(item.get("aliases"), list)
+                                else "",
+                            ]
+                        )
+            if self._action_terms_match_segment(segment, haystack_parts):
+                return "affordance_or_target_matched_segment_intent"
+        if self._is_sleep_or_rest_segment(npc_id, segment) and result.action_type in {"wait", "use_affordance"}:
+            return "rest_or_sleep_action_at_lifecycle_location"
+        return ""
+
+    def _action_terms_match_segment(
+        self,
+        segment: ScheduleSegment,
+        haystack_parts: list[str],
+    ) -> bool:
+        haystack = " ".join(haystack_parts).lower()
+        needles = [segment.intent, *segment.subtasks, *segment.completion_tags]
+        tokens = [
+            token
+            for needle in needles
+            for token in _semantic_tokens(needle)
+        ]
+        return any(token and token in haystack for token in tokens)
+
+    def _record_free_action_result(self, npc_id: str, result: ActionResult) -> None:
+        location = self.state.location_for(npc_id)
+        minute = result.facts.get("start_minute", self.state.clock.minute)
+        self.free_action_log.append(
+            {
+                "day": self.state.clock.day,
+                "time": _minute_label(minute) if isinstance(minute, int) else self.state.clock.label(),
+                "minute": minute,
+                "npc_id": npc_id,
+                "action_type": result.action_type,
+                "status": result.status,
+                "reason": result.reason,
+                "location_id": location.id if location is not None else None,
                 "facts": result.facts,
             }
         )
@@ -4033,6 +6153,10 @@ def _schedule_dict(schedule: ScheduleSegment | None) -> dict[str, object] | None
         "location_id": schedule.location_id,
         "intent": schedule.intent,
         "subtasks": list(schedule.subtasks),
+        "completion_tags": list(schedule.completion_tags),
+        "completion_policy": schedule.completion_policy,
+        "min_matching_actions": schedule.min_matching_actions,
+        "allow_explicit_override": schedule.allow_explicit_override,
     }
 
 
@@ -4137,22 +6261,90 @@ def _object_matches_schedule(
     return any(token and token in haystack for token in _semantic_tokens(schedule.intent))
 
 
+def _normalize_match_text(text: str) -> str:
+    return " ".join(str(text).lower().strip().split())
+
+
+def _text_match_score(query: str, text: str) -> int:
+    normalized_query = _normalize_match_text(query)
+    normalized_text = _normalize_match_text(text)
+    if not normalized_query or not normalized_text:
+        return 0
+    score = 0
+    if normalized_query == normalized_text:
+        score += 20
+    elif normalized_query in normalized_text:
+        score += 12
+    query_tokens = set(_semantic_tokens(normalized_query))
+    text_tokens = set(_semantic_tokens(normalized_text))
+    overlap = query_tokens & text_tokens
+    score += len(overlap) * 4
+    return score
+
+
+def _affordance_match_score(query: str, affordance: SemanticAffordance) -> int:
+    return _text_match_score(
+        query,
+        " ".join(
+            [
+                affordance.id,
+                affordance.label,
+                affordance.description,
+                affordance.event_type,
+                *affordance.aliases,
+            ]
+        ),
+    )
+
+
+def _matching_affordances(
+    intent: str,
+    affordances: list[SemanticAffordance],
+) -> list[SemanticAffordance]:
+    normalized_intent = _normalize_match_text(intent)
+    matches: list[SemanticAffordance] = []
+    for affordance in affordances:
+        terms = [
+            affordance.id,
+            affordance.label,
+            affordance.description,
+            affordance.event_type,
+            *affordance.aliases,
+        ]
+        normalized_terms = [_normalize_match_text(term) for term in terms if term]
+        if (
+            _affordance_match_score(intent, affordance) > 0
+            or normalized_intent in normalized_terms
+            or any(term and term in normalized_intent for term in normalized_terms)
+        ):
+            matches.append(affordance)
+    return matches
+
+
+def _suggest_affordances(
+    intent: str,
+    affordances: list[SemanticAffordance],
+    *,
+    limit: int = 3,
+) -> list[dict[str, object]]:
+    scored = [
+        (score, affordance)
+        for affordance in affordances
+        if (score := _affordance_match_score(intent, affordance)) > 0
+    ]
+    if not scored:
+        scored = [(0, affordance) for affordance in affordances]
+    return [
+        _affordance_dict(affordance)
+        for _, affordance in sorted(scored, key=lambda item: (-item[0], item[1].id))[:limit]
+    ]
+
+
 def _intent_matches_affordance(
     intent: str,
     affordances: list[SemanticAffordance],
 ) -> bool:
-    normalized = intent.lower().strip()
-    tokens = _semantic_tokens(intent)
-    for affordance in affordances:
-        haystack = (
-            f"{affordance.id} {affordance.label} {affordance.description} "
-            f"{' '.join(affordance.aliases)}"
-        ).lower()
-        if affordance.id == normalized or normalized in haystack:
-            return True
-        if any(token and token in haystack for token in tokens):
-            return True
-    return False
+    return bool(_matching_affordances(intent, affordances))
 
 
 def _render_affordance_refs(affordances: list[SemanticAffordance]) -> str:
@@ -4224,6 +6416,10 @@ def _full_schedule_dict(segment: ScheduleSegment) -> dict[str, object]:
         "location_id": segment.location_id,
         "intent": segment.intent,
         "subtasks": list(segment.subtasks),
+        "completion_tags": list(segment.completion_tags),
+        "completion_policy": segment.completion_policy,
+        "min_matching_actions": segment.min_matching_actions,
+        "allow_explicit_override": segment.allow_explicit_override,
     }
 
 
@@ -4234,6 +6430,28 @@ def _schedule_completion_dict(completion) -> dict[str, object]:
         "start_minute": completion.start_minute,
         "location_id": completion.location_id,
         "note": completion.note,
+        "completion_type": getattr(completion, "completion_type", "explicit_request"),
+        "matched_action_id": getattr(completion, "matched_action_id", None),
+        "matched_action_type": getattr(completion, "matched_action_type", None),
+        "matching_reason": getattr(completion, "matching_reason", ""),
+        "completion_policy": getattr(completion, "completion_policy", "first_matching_action"),
+        "action_end_minute": getattr(completion, "action_end_minute", None),
+        "completion_reason": getattr(completion, "completion_reason", ""),
+    }
+
+
+def _schedule_satisfaction_dict(satisfaction: ScheduleSatisfaction) -> dict[str, object]:
+    return {
+        "npc_id": satisfaction.npc_id,
+        "day": satisfaction.day,
+        "start_minute": satisfaction.start_minute,
+        "location_id": satisfaction.location_id,
+        "completion_policy": satisfaction.completion_policy,
+        "matched_action_id": satisfaction.matched_action_id,
+        "matched_action_type": satisfaction.matched_action_type,
+        "matching_reason": satisfaction.matching_reason,
+        "action_end_minute": satisfaction.action_end_minute,
+        "match_count": satisfaction.match_count,
     }
 
 
@@ -4249,9 +6467,64 @@ def _resident_day_plan_dict(day_plan: ResidentDayPlan | None) -> dict[str, objec
         "validation": dict(day_plan.validation),
         "schedule_summary": day_plan.schedule_summary,
         "day_summary": day_plan.day_summary,
+        "schedule_evidence": list(day_plan.schedule_evidence),
         "started_minute": day_plan.started_minute,
         "ended_minute": day_plan.ended_minute,
+        "lifecycle_anomalies": list(day_plan.lifecycle_anomalies),
     }
+
+
+def _movement_intent(intent: str) -> bool:
+    tokens = _semantic_tokens(intent)
+    movement_terms = {"去", "到", "前往", "返回", "回家", "移动", "travel", "go", "move", "return"}
+    return any(term in intent.lower() for term in movement_terms) or any(
+        token in movement_terms for token in tokens
+    )
+
+
+class _FinalizedActionView:
+    def __init__(self, payload: dict[str, object]) -> None:
+        self.action_id = str(payload.get("action_id") or "")
+        self.action_type = str(payload.get("action_type") or "")
+        self.status = str(payload.get("status") or "")
+        facts = payload.get("facts", {})
+        self.facts = facts if isinstance(facts, dict) else {}
+        if "location_id" not in self.facts and payload.get("location_id") is not None:
+            self.facts = {**self.facts, "location_id": payload.get("location_id")}
+
+
+def _normalize_schedule_completion_policy(value: str) -> str:
+    if value in SCHEDULE_COMPLETION_POLICIES:
+        return value
+    return "first_matching_action"
+
+
+def _schedule_is_fallback(segment: ScheduleSegment) -> bool:
+    return any(str(item).startswith("fallback") for item in segment.subtasks)
+
+
+def _revision_mentions_segment(
+    revision_log: dict[str, object],
+    segment: ScheduleSegment,
+) -> bool:
+    for key in ("before", "after"):
+        payload = revision_log.get(key)
+        if not isinstance(payload, dict):
+            continue
+        if (
+            payload.get("start_minute") == segment.start_minute
+            and payload.get("location_id") == segment.location_id
+        ):
+            return True
+    return False
+
+
+def _interruption_overlaps_segment(
+    action_log: dict[str, object],
+    segment: ScheduleSegment,
+) -> bool:
+    minute = action_log.get("minute")
+    return isinstance(minute, int) and segment.start_minute <= minute < segment.end_minute
 
 
 def _schedule_summary(schedule: list[ScheduleSegment]) -> str:
@@ -4273,6 +6546,45 @@ def _loop_guard_target(item: dict[str, object]) -> str:
         if value:
             return str(value)
     return ""
+
+
+def _snapshot_mapping(payload: dict[str, object], key: str) -> dict[str, object]:
+    value = payload.get(key)
+    if not isinstance(value, dict):
+        raise TownPersistenceError(f"runtime snapshot section must be an object: {key}")
+    return value
+
+
+def _validate_backend_path(path: str | Path | object | None, label: str) -> None:
+    if path is None:
+        raise TownPersistenceError(f"missing backend reference: {label}")
+    backend_path = Path(path)
+    if backend_path.exists():
+        if not backend_path.is_dir():
+            raise TownPersistenceError(f"incompatible backend reference {label}: {backend_path}")
+        return
+    backend_path.mkdir(parents=True, exist_ok=True)
+
+
+def _freeze_snapshot_key(value: object) -> tuple[object, ...]:
+    if not isinstance(value, list):
+        return (value,)
+    return tuple(_freeze_snapshot_key(item) if isinstance(item, list) else item for item in value)
+
+
+def _normalize_completion_type(value: str) -> str:
+    aliases = {
+        "explicit": "explicit_request",
+        "inferred": "inferred_action_match",
+        "automatic": "automatic_action_match",
+        "auto": "automatic_action_match",
+        "explicit_request": "explicit_request",
+        "inferred_action_match": "inferred_action_match",
+        "automatic_action_match": "automatic_action_match",
+        "repair": "repair",
+        "day_finalize_missed": "day_finalize_missed",
+    }
+    return aliases.get(value, "explicit_request")
 
 
 def _schedule_from_agent_response(response: AgentResponse) -> list[ScheduleSegment]:
@@ -4300,9 +6612,10 @@ def _schedule_from_agent_response(response: AgentResponse) -> list[ScheduleSegme
             location_id = str(item["location_id"])
             intent = str(item["intent"])
             subtasks_raw = item.get("subtasks", [])
+            completion_tags_raw = item.get("completion_tags", [])
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError("invalid_schedule_plan") from exc
-        if not isinstance(subtasks_raw, list):
+        if not isinstance(subtasks_raw, list) or not isinstance(completion_tags_raw, list):
             raise ValueError("invalid_schedule_plan")
         segments.append(
             ScheduleSegment(
@@ -4312,6 +6625,7 @@ def _schedule_from_agent_response(response: AgentResponse) -> list[ScheduleSegme
                 location_id=location_id,
                 intent=intent,
                 subtasks=[str(subtask) for subtask in subtasks_raw],
+                completion_tags=[str(tag) for tag in completion_tags_raw],
             )
         )
     return segments

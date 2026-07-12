@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from annie.npc.context import AgentContext
-from annie.npc.response import AgentResponse
+from annie.npc.core.context import AgentContext
+from annie.npc.core.response import AgentResponse
 from annie.town.engine import TownWorldEngine
 from annie.town.domain import ScheduleSegment
 
@@ -77,8 +77,6 @@ def run_single_npc_day(
                 _segment_event(segment, step),
             )
             response = agent.run(context)
-            for action in response.actions:
-                engine.execute_action(npc_id, action)
             engine.handle_response(npc_id, response)
 
             end_location = engine.state.location_id_for(npc_id)
@@ -88,7 +86,7 @@ def run_single_npc_day(
                     start_location_id=start_location,
                     end_location_id=end_location,
                     dialogue=response.dialogue,
-                    action_count=len(response.actions),
+                    action_count=len(response.tool_statuses),
                 )
             )
 

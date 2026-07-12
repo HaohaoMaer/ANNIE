@@ -26,7 +26,7 @@ from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 
 from annie.npc import NPCAgent
-from annie.npc.state import Background, Goals, NPCProfile, Personality
+from annie.npc.core.state import Background, Goals, NPCProfile, Personality
 from annie.world_engine import DefaultWorldEngine
 
 

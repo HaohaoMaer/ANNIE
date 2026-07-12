@@ -6,8 +6,8 @@ from types import SimpleNamespace
 
 from langchain_core.messages import AIMessage
 
-from annie.npc.planner import Planner
-from annie.npc.state import Task
+from annie.npc.cognition.planner import Planner
+from annie.npc.core.state import Task
 
 
 class _StubLLM:

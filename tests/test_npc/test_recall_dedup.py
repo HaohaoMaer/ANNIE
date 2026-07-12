@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from annie.npc.context import AgentContext
+from annie.npc.core.context import AgentContext
 from annie.npc.memory.interface import MemoryRecord
 from annie.npc.runtime.memory_context import MemoryContextBuilder
 from annie.npc.tools.base_tool import ToolContext
@@ -16,8 +16,10 @@ from annie.npc.tools.builtin import MemoryGrepTool, MemoryRecallTool
 class _StubMemory:
     def __init__(self, records: list[MemoryRecord]) -> None:
         self._records = records
+        self.last_recall: dict[str, object] = {}
 
     def recall(self, query, categories=None, k=5):
+        self.last_recall = {"query": query, "categories": categories, "k": k}
         return list(self._records[:k])
 
     def grep(self, pattern, category=None, metadata_filters=None, k=20):
@@ -91,6 +93,32 @@ def test_recall_tool_registers_new_records():
 
     assert "fact X" in seen
     assert "fact Y" in seen
+
+
+def test_recall_tool_coerces_common_category_and_k_shapes():
+    recs = _records("fact X")
+    cases = [
+        (["impression"], ["impression"], 5),
+        ("impression", ["impression"], 5),
+        ('["impression", "todo"]', ["impression", "todo"], 5),
+        ("impression,todo", ["impression", "todo"], 7),
+    ]
+
+    for raw_categories, expected_categories, expected_k in cases:
+        mem = _StubMemory(recs)
+        tool = MemoryRecallTool()
+        ctx = _make_ctx(mem, set())
+        tool.call(
+            {
+                "query": "anything",
+                "categories": raw_categories,
+                "k": str(expected_k),
+            },
+            ctx,
+        )
+
+        assert mem.last_recall["categories"] == expected_categories
+        assert mem.last_recall["k"] == expected_k
 
 
 def test_grep_tool_filters_seen_ids():

@@ -6,10 +6,9 @@ from pathlib import Path
 import chromadb
 import pytest
 
-from annie.npc.context import AgentContext
-from annie.npc.graph_registry import AgentGraphID
-from annie.npc.response import ActionRequest, AgentResponse, MemoryUpdate
-from annie.npc.routes import AgentRoute
+from annie.npc.core.context import AgentContext
+from annie.npc.core.response import ActionRequest, AgentResponse, MemoryUpdate
+from annie.npc.core.routes import AgentRoute
 from annie.npc.tools.base_tool import ToolContext
 from annie.town import (
     Location,
@@ -20,6 +19,8 @@ from annie.town import (
     TownState,
     TownWorldEngine,
     create_small_town_state,
+    default_scaled_town_scenario_path,
+    load_town_scenario,
     run_single_npc_day,
 )
 from annie.town.domain import CurrentAction
@@ -31,6 +32,14 @@ def _town_engine(tmp_path: Path) -> TownWorldEngine:
         create_small_town_state(),
         chroma_client=chromadb.PersistentClient(path=str(tmp_path / "vs")),
         history_dir=tmp_path / "history",
+    )
+
+
+def _scaled_town_engine(tmp_path: Path) -> TownWorldEngine:
+    return TownWorldEngine(
+        load_town_scenario(default_scaled_town_scenario_path()).state,
+        chroma_client=chromadb.PersistentClient(path=str(tmp_path / "scaled_vs")),
+        history_dir=tmp_path / "scaled_history",
     )
 
 
@@ -153,6 +162,113 @@ def test_small_town_fixture_has_expanded_semantic_affordances() -> None:
         assert "repair_bench" in resident.spatial_memory.known_object_ids
 
 
+def test_use_affordance_matches_id_case_insensitively(tmp_path: Path) -> None:
+    engine = _scaled_town_engine(tmp_path)
+    engine.state.set_location("ada", "home_ada")
+
+    result = engine.use_affordance("ada", "home_ada", "Rest")
+
+    assert result.status == "succeeded"
+    assert result.facts["affordance_id"] == "rest"
+    assert result.facts["requested_affordance_id"] == "Rest"
+
+
+def test_interact_with_supported_alias_does_not_return_unsupported(tmp_path: Path) -> None:
+    engine = _scaled_town_engine(tmp_path)
+    engine.state.set_location("jules", "riverside_cafe")
+    before_events = len(engine.state.events)
+
+    result = engine.interact_with("jules", "cafe_counter_scale", "deliver pastries")
+
+    assert result.status == "succeeded"
+    assert result.reason is None
+    assert len(engine.state.events) == before_events + 1
+    assert result.facts["matched_affordances"][0]["id"] == "deliver_pastries"
+
+
+def test_unsupported_interaction_returns_suggestions_without_event(tmp_path: Path) -> None:
+    engine = _scaled_town_engine(tmp_path)
+    engine.state.set_location("jules", "riverside_cafe")
+    before_events = len(engine.state.events)
+
+    result = engine.interact_with("jules", "cafe_counter_scale", "repair violin")
+
+    assert result.status == "failed"
+    assert result.reason == "unsupported_affordance"
+    assert len(engine.state.events) == before_events
+    assert result.facts["available_affordances"]
+    assert result.facts["suggested_affordances"]
+
+
+def test_find_affordance_targets_returns_delivery_counter(tmp_path: Path) -> None:
+    engine = _scaled_town_engine(tmp_path)
+
+    result = engine.find_affordance_targets("ada", "deliver pastries")
+
+    assert result["ok"] is True
+    targets = {(item["location_id"], item["id"]) for item in result["results"]}
+    assert ("riverside_cafe", "cafe_counter_scale") in targets
+    counter = next(item for item in result["results"] if item["id"] == "cafe_counter_scale")
+    assert counter["matched_affordances"][0]["id"] in {"deliver_pastries", "place_delivery"}
+    assert counter["travel_hint"]
+
+
+def test_rest_segment_can_complete_from_home_wait(tmp_path: Path) -> None:
+    engine = _scaled_town_engine(tmp_path)
+    engine.state.clock.minute = 14 * 60
+    engine.state.set_location("sam", "home_sam")
+    engine.state.set_schedule(
+        "sam",
+        [
+            ScheduleSegment(
+                npc_id="sam",
+                start_minute=14 * 60,
+                duration_minutes=60,
+                location_id="home_sam",
+                intent="Rest and file notes",
+                completion_tags=["rest", "file_notes"],
+                day=1,
+            )
+        ],
+        day=1,
+    )
+
+    result = engine.wait("sam", 10)
+
+    assert result.status == "succeeded"
+    assert "sam" not in engine.state.completed_schedule_segments
+    engine.state.clock.minute = int(result.facts["end_minute"])
+    finalized = engine._finalize_due_current_actions(["sam"], at_minute=engine.state.clock.minute)
+    assert finalized
+    completed = engine.state.completed_schedule_segments["sam"][0]
+    assert completed.completion_type == "automatic_action_match"
+    assert completed.matching_reason == "rest_or_sleep_action_at_lifecycle_location"
+
+
+def test_scaled_key_schedule_affordances_infer_completion(tmp_path: Path) -> None:
+    engine = _scaled_town_engine(tmp_path)
+
+    cases = [
+        ("jules", 12 * 60, "riverside_cafe", "cafe_counter_scale", "deliver_pastries"),
+        ("ben", 9 * 60, "green_market", "market_stall_scale", "prepare_stall"),
+        ("tara", 9 * 60, "fire_station", "equipment_rack_scale", "inspect_equipment"),
+        ("sam", 14 * 60, "home_sam", "home_sam_table", "file_notes"),
+    ]
+    for npc_id, minute, location_id, target_id, affordance_id in cases:
+        engine.state.clock.minute = minute
+        engine.state.clear_current_action(npc_id)
+        engine.state.set_location(npc_id, location_id)
+        result = engine.use_affordance(npc_id, target_id, affordance_id)
+        assert result.status == "succeeded"
+        engine.state.clock.minute = int(result.facts["end_minute"])
+        engine._finalize_due_current_actions([npc_id], at_minute=engine.state.clock.minute)
+        assert any(
+            item.completion_type == "automatic_action_match"
+            and item.matched_action_type == "use_affordance"
+            for item in engine.state.completed_schedule_segments.get(npc_id, [])
+        ), npc_id
+
+
 def test_move_updates_location_occupancy() -> None:
     state = create_small_town_state()
 
@@ -203,6 +319,20 @@ def test_move_rejects_unknown_npc_and_destination() -> None:
     assert unknown_destination.ok is False
     assert unknown_destination.reason == "unknown_destination"
     assert state.npc_locations["alice"] == "home_alice"
+
+
+def test_engine_move_to_auto_routes_indirect_destination(tmp_path: Path) -> None:
+    engine = _scaled_town_engine(tmp_path)
+    engine.state.set_location("priya", "home_priya")
+
+    result = engine.move_to("priya", "daycare")
+
+    assert result.status == "succeeded"
+    assert engine.state.location_id_for("priya") == "town_square"
+    assert result.facts["requested_destination_id"] == "daycare"
+    assert result.facts["actual_destination_id"] == "town_square"
+    assert result.facts["route"][:2] == ["home_priya", "town_square"]
+    assert result.facts["auto_routed"] is True
 
 
 def test_current_schedule_segment_uses_simulated_minutes() -> None:
@@ -297,6 +427,257 @@ def test_set_schedule_updates_resident_and_legacy_mirror() -> None:
     assert state.current_schedule_segment("alice", minute=10 * 60).intent == "还书"
 
 
+def test_full_day_start_uses_sleep_location_and_records_wake_up(tmp_path: Path) -> None:
+    engine = _town_engine(tmp_path)
+    engine.state.set_location("bob", "cafe")
+
+    engine.start_day_for_resident("bob", day=2, start_minute=0, end_minute=24 * 60)
+
+    bob = engine.state.residents["bob"]
+    assert bob.location_id == "home_bob"
+    assert bob.lifecycle_status == "sleeping"
+    assert bob.day_plans[2].wake_up_minute == 360
+    assert any(item["stage"] == "day_start_lifecycle" for item in engine.planning_log)
+
+
+def test_full_day_schedule_validation_repairs_sleep_and_return_home(tmp_path: Path) -> None:
+    engine = _town_engine(tmp_path)
+    engine.state.clock.day = 1
+    engine.state.clock.minute = 0
+    engine.state.set_location("alice", "home_alice")
+
+    accepted = engine.plan_day_for_resident(
+        "alice",
+        [
+            ScheduleSegment(
+                npc_id="alice",
+                start_minute=0,
+                duration_minutes=60,
+                location_id="cafe",
+                intent="买咖啡",
+            )
+        ],
+        day=1,
+        repair_invalid=True,
+    )
+
+    validation = engine.state.residents["alice"].day_plans[1].validation
+    assert any("sleep" in segment.intent or "睡" in segment.intent for segment in accepted)
+    assert any(segment.location_id == "home_alice" for segment in accepted)
+    assert "missing_sleep_segment_repaired" in validation["warnings"]
+
+
+def test_end_day_settles_valid_sleep_home_for_next_day(tmp_path: Path) -> None:
+    engine = _town_engine(tmp_path)
+    engine.state.clock.day = 1
+    engine.state.clock.minute = 24 * 60
+    engine.plan_day_for_resident(
+        "alice",
+        [
+            ScheduleSegment(
+                npc_id="alice",
+                start_minute=22 * 60,
+                duration_minutes=120,
+                location_id="home_alice",
+                intent="回家睡觉",
+            )
+        ],
+        day=1,
+        repair_invalid=True,
+    )
+
+    engine.end_day_for_resident("alice", day=1)
+    engine.start_day_for_resident("alice", day=2, start_minute=0, end_minute=24 * 60)
+
+    alice = engine.state.residents["alice"]
+    assert alice.location_id == "home_alice"
+    assert alice.lifecycle_status == "sleeping"
+    assert alice.day_plans[1].lifecycle_anomalies == []
+
+
+def test_end_day_records_lifecycle_anomaly_without_silent_normalization(tmp_path: Path) -> None:
+    engine = _town_engine(tmp_path)
+    engine.state.clock.day = 1
+    engine.state.clock.minute = 24 * 60
+    engine.state.set_location("alice", "cafe")
+    engine.plan_day_for_resident(
+        "alice",
+        [
+            ScheduleSegment(
+                npc_id="alice",
+                start_minute=8 * 60,
+                duration_minutes=60,
+                location_id="cafe",
+                intent="买咖啡",
+            )
+        ],
+        day=1,
+    )
+
+    engine.end_day_for_resident("alice", day=1)
+
+    anomalies = engine.state.residents["alice"].day_plans[1].lifecycle_anomalies
+    assert anomalies
+    assert engine.state.residents["alice"].location_id == "cafe"
+
+
+def test_successful_action_infers_schedule_completion_without_finish(tmp_path: Path) -> None:
+    engine = _town_engine(tmp_path)
+    engine.state.clock.day = 1
+    engine.state.clock.minute = 8 * 60
+    engine.plan_day_for_resident(
+        "alice",
+        [
+            ScheduleSegment(
+                npc_id="alice",
+                start_minute=8 * 60,
+                duration_minutes=60,
+                location_id="home_alice",
+                intent="吃早餐",
+            )
+        ],
+        day=1,
+    )
+
+    result = engine.interact_with("alice", "breakfast_table", "吃早餐")
+
+    assert result.status == "succeeded"
+    assert "alice" not in engine.state.completed_schedule_segments
+    engine.state.clock.minute = int(result.facts["end_minute"])
+    finalized = engine._finalize_due_current_actions(["alice"], at_minute=engine.state.clock.minute)
+    assert finalized[0]["schedule_completion"]["completion_type"] == "automatic_action_match"
+    completion = engine.state.completed_schedule_segments["alice"][0]
+    assert completion.completion_type == "automatic_action_match"
+    engine.state.clock.minute = 9 * 60
+    engine.end_day_for_resident("alice", day=1)
+    evidence = engine.state.residents["alice"].day_plans[1].schedule_evidence
+    assert evidence[0]["status"] == "completed"
+    assert evidence[0]["completion_type"] == "automatic_action_match"
+
+
+def test_movement_does_not_auto_complete_non_travel_segment(tmp_path: Path) -> None:
+    engine = _town_engine(tmp_path)
+    engine.state.clock.minute = 9 * 60
+    engine.state.move_npc("alice", "town_square")
+
+    result = engine.move_to("alice", "cafe")
+    engine.state.clock.minute = int(result.facts["end_minute"])
+    engine._finalize_due_current_actions(["alice"], at_minute=engine.state.clock.minute)
+
+    segment = engine.state.current_schedule_segment("alice")
+    assert segment is not None and segment.intent == "买咖啡"
+    assert not engine.state.is_schedule_segment_complete("alice", segment)
+    assert engine.state.schedule_segment_satisfaction("alice", segment) is None
+
+
+def test_travel_segment_can_auto_complete_from_finalized_movement(tmp_path: Path) -> None:
+    engine = _town_engine(tmp_path)
+    engine.state.clock.minute = 8 * 60
+    engine.state.set_schedule(
+        "alice",
+        [
+            ScheduleSegment(
+                npc_id="alice",
+                start_minute=8 * 60,
+                duration_minutes=30,
+                location_id="town_square",
+                intent="前往 town_square",
+            )
+        ],
+        day=1,
+    )
+
+    result = engine.move_to("alice", "town_square")
+    engine.state.clock.minute = int(result.facts["end_minute"])
+    engine._finalize_due_current_actions(["alice"], at_minute=engine.state.clock.minute)
+
+    completion = engine.state.completed_schedule_segments["alice"][0]
+    assert completion.completion_type == "automatic_action_match"
+    assert completion.matching_reason == "movement_reached_segment_location"
+
+
+def test_sustained_and_min_count_completion_policies(tmp_path: Path) -> None:
+    engine = _town_engine(tmp_path)
+    engine.state.clock.minute = 8 * 60
+    engine.state.set_schedule(
+        "bob",
+        [
+            ScheduleSegment(
+                npc_id="bob",
+                start_minute=8 * 60,
+                duration_minutes=30,
+                location_id="cafe",
+                intent="准备咖啡馆营业",
+                completion_policy="occupy_until_segment_end",
+            ),
+            ScheduleSegment(
+                npc_id="bob",
+                start_minute=8 * 60 + 30,
+                duration_minutes=30,
+                location_id="cafe",
+                intent="整理咖啡馆",
+                completion_tags=["整理柜台", "整理点心"],
+                completion_policy="min_matching_actions",
+                min_matching_actions=2,
+            ),
+        ],
+        day=1,
+    )
+
+    first = engine.interact_with("bob", "cafe_counter", "准备咖啡馆营业，检查柜台")
+    engine.state.clock.minute = int(first.facts["end_minute"])
+    engine._finalize_due_current_actions(["bob"], at_minute=engine.state.clock.minute)
+    first_segment = engine.state.schedule_for("bob")[0]
+    assert engine.state.is_schedule_segment_satisfied("bob", first_segment)
+    assert not engine.state.is_schedule_segment_complete("bob", first_segment)
+    assert engine._next_available_minute("bob", at_minute=engine.state.clock.minute) == first_segment.end_minute
+
+    engine.state.clock.minute = first_segment.end_minute
+    engine._record_due_schedule_evidence(["bob"], at_minute=engine.state.clock.minute)
+    assert engine.state.is_schedule_segment_complete("bob", first_segment)
+
+    second_segment = engine.state.schedule_for("bob")[1]
+    one = engine.interact_with("bob", "cafe_counter", "整理柜台")
+    engine.state.clock.minute = int(one.facts["end_minute"])
+    engine._finalize_due_current_actions(["bob"], at_minute=engine.state.clock.minute)
+    assert engine.state.is_schedule_segment_satisfied("bob", second_segment)
+    assert not engine.state.is_schedule_segment_complete("bob", second_segment)
+
+    two = engine.interact_with("bob", "pastry_case", "整理点心柜")
+    engine.state.clock.minute = int(two.facts["end_minute"])
+    engine._finalize_due_current_actions(["bob"], at_minute=engine.state.clock.minute)
+    assert engine.state.is_schedule_segment_complete("bob", second_segment)
+
+
+def test_explicit_policy_does_not_auto_complete_from_matching_action(tmp_path: Path) -> None:
+    engine = _town_engine(tmp_path)
+    engine.state.clock.minute = 8 * 60
+    engine.state.set_schedule(
+        "alice",
+        [
+            ScheduleSegment(
+                npc_id="alice",
+                start_minute=8 * 60,
+                duration_minutes=30,
+                location_id="home_alice",
+                intent="吃早餐",
+                completion_policy="explicit",
+            )
+        ],
+        day=1,
+    )
+
+    result = engine.interact_with("alice", "breakfast_table", "吃早餐")
+    engine.state.clock.minute = int(result.facts["end_minute"])
+    engine._finalize_due_current_actions(["alice"], at_minute=engine.state.clock.minute)
+    segment = engine.state.schedule_for("alice")[0]
+
+    assert not engine.state.is_schedule_segment_complete("alice", segment)
+    explicit = engine.complete_current_schedule("alice", "早餐完成")
+    assert explicit.status == "succeeded"
+    assert engine.state.completed_schedule_segments["alice"][0].completion_type == "explicit_request"
+
+
 def test_town_world_engine_builds_minimal_agent_context(tmp_path) -> None:
     engine = _town_engine(tmp_path)
 
@@ -305,7 +686,7 @@ def test_town_world_engine_builds_minimal_agent_context(tmp_path) -> None:
     assert isinstance(context, AgentContext)
     assert context.npc_id == "bob"
     assert context.input_event == "开始清晨日程。"
-    assert context.graph_id == AgentGraphID.ACTION_EXECUTOR_DEFAULT
+    assert context.route == AgentRoute.ACTION
     assert "咖啡馆" in context.situation
     assert "咖啡馆柜台" in context.situation
     assert "全局模拟每 tick 推进 10 分钟" in context.situation
@@ -320,13 +701,13 @@ def test_town_world_engine_builds_minimal_agent_context(tmp_path) -> None:
         "plan_todo",
         "move_to",
         "observe",
-        "speak_to",
-        "start_conversation",
+        "talk_to",
         "interact_with",
         "inspect_affordances",
+        "find_affordance_targets",
         "use_affordance",
         "wait",
-        "finish_schedule_segment",
+        "complete_current_schedule",
     }
     assert "必须通过小镇工具改变世界状态" in context.world_rules
     assert "不能只用自然语言描述行动" in context.world_rules
@@ -370,9 +751,8 @@ def test_context_hints_finish_after_repeated_schedule_progress(tmp_path) -> None
     context = engine.build_context("bob", "继续准备咖啡馆营业。")
 
     assert "本日程段已有 3 个成功行动" in context.situation
-    assert "应优先调用 finish_schedule_segment" in context.situation
-    assert "而不是继续重复同类交互" in context.situation
-    assert "finish_schedule_segment" in context.extra["town"]["current_schedule_completion_hint"]
+    assert "不要继续重复同类交互" in context.situation
+    assert "complete_current_schedule" not in context.extra["town"]["current_schedule_completion_hint"]
     assert "当前活动决策提示" in context.situation
     assert "对象选择" in context.situation
     assert "等待判断" in context.situation
@@ -423,7 +803,6 @@ def test_build_daily_planning_context_is_tool_free_and_town_owned(tmp_path) -> N
     town = context.extra["town"]
     assert context.tools == []
     assert context.route == AgentRoute.STRUCTURED_JSON
-    assert context.graph_id == AgentGraphID.OUTPUT_STRUCTURED_JSON
     assert town["planning"] is True
     assert town["npc_id"] == "alice"
     assert town["current_location_id"] == "home_alice"
@@ -775,7 +1154,7 @@ def test_bob_schedule_policy_suggests_finish_after_distinct_prep_objects(tmp_pat
     schedule_hint = context.extra["town"]["prompt_policy"]["schedule_decision_hint"]
 
     assert "准备类目标已有足够证据" in schedule_hint
-    assert "finish_schedule_segment" in schedule_hint
+    assert "complete_current_schedule" not in schedule_hint
 
 
 def test_clara_schedule_policy_suggests_finish_after_returns_and_shelf(tmp_path) -> None:
@@ -789,7 +1168,7 @@ def test_clara_schedule_policy_suggests_finish_after_returns_and_shelf(tmp_path)
     schedule_hint = context.extra["town"]["prompt_policy"]["schedule_decision_hint"]
 
     assert "整理类目标已有归还/书架处理证据" in schedule_hint
-    assert "finish_schedule_segment" in schedule_hint
+    assert "complete_current_schedule" not in schedule_hint
 
 
 def test_alice_coffee_policy_suggests_finish_after_order_at_cafe(tmp_path) -> None:
@@ -799,12 +1178,15 @@ def test_alice_coffee_policy_suggests_finish_after_order_at_cafe(tmp_path) -> No
     engine.state.move_npc("alice", "cafe")
 
     engine.interact_with("alice", "cafe_counter", "点咖啡并取咖啡")
+    action = engine.state.current_action_for("alice")
+    assert action is not None
+    engine.state.clock.minute = action.end_minute
+    engine._finalize_due_current_actions(["alice"], at_minute=engine.state.clock.minute)
 
     context = engine.build_context("alice", "继续买咖啡。")
     schedule_hint = context.extra["town"]["prompt_policy"]["schedule_decision_hint"]
 
-    assert "消费/取物类目标已有直接相关行动" in schedule_hint
-    assert "finish_schedule_segment" in schedule_hint
+    assert "当前日程段已经完成" in schedule_hint
 
 
 def test_wait_policy_prefers_wait_only_when_visible_npc_busy(tmp_path) -> None:
@@ -849,7 +1231,7 @@ def test_repeat_guard_warns_after_repeated_speak_to_text(tmp_path) -> None:
 
     context = engine.build_context("alice", "继续互动。")
 
-    assert "重复 speak_to 文本" in context.extra["town"]["prompt_policy"]["repeat_guard_hint"]
+    assert "重复同一句" in context.extra["town"]["prompt_policy"]["repeat_guard_hint"]
 
 
 def test_small_town_fixture_has_interactable_schedule_objects(tmp_path) -> None:
@@ -865,6 +1247,19 @@ def test_small_town_fixture_has_interactable_schedule_objects(tmp_path) -> None:
     assert "简单早餐" in engine.state.objects["breakfast_table"].description
     assert "可颂和松饼" in engine.state.objects["pastry_case"].description
     assert "刚归还的书" in engine.state.objects["returns_cart"].description
+
+
+def test_interact_with_matches_affordance_terms_inside_free_text_intent(tmp_path) -> None:
+    engine = _town_engine(tmp_path)
+
+    result = engine.interact_with(
+        "bob",
+        "pastry_case",
+        "整理点心陈列柜，检查可颂和松饼的新鲜度，把它们摆放整齐。",
+    )
+
+    assert result.status == "succeeded"
+    assert result.facts["object_id"] == "pastry_case"
 
 
 def test_town_world_engine_executes_move_action(tmp_path) -> None:
@@ -968,10 +1363,10 @@ def test_wait_tool_updates_current_action_without_advancing_clock(tmp_path) -> N
     assert engine.state.current_actions["alice"].duration_minutes == 15
 
 
-def test_finish_schedule_segment_tool_marks_current_segment_done(tmp_path) -> None:
+def test_complete_current_schedule_tool_marks_current_segment_done(tmp_path) -> None:
     engine = _town_engine(tmp_path)
     context = engine.build_context("alice", "完成早餐日程。")
-    tool = next(tool for tool in context.tools if tool.name == "finish_schedule_segment")
+    tool = next(tool for tool in context.tools if tool.name == "complete_current_schedule")
 
     result = tool.safe_call(
         {"note": "早餐已完成"},
@@ -986,6 +1381,19 @@ def test_finish_schedule_segment_tool_marks_current_segment_done(tmp_path) -> No
     assert engine.state.is_schedule_segment_complete("alice", segment)
 
 
+def test_complete_current_schedule_rejects_without_location_or_action_evidence(tmp_path) -> None:
+    engine = _town_engine(tmp_path)
+    engine.state.set_location("alice", "town_square")
+
+    result = engine.complete_current_schedule("alice", "早餐已完成")
+
+    assert result.status == "failed"
+    assert result.reason == "insufficient_completion_evidence"
+    segment = engine.state.current_schedule_segment("alice")
+    assert segment is not None
+    assert not engine.state.is_schedule_segment_complete("alice", segment)
+
+
 class _ToolDrivingAgent:
     def run(self, context: AgentContext) -> AgentResponse:
         town = context.extra["town"]
@@ -995,7 +1403,7 @@ class _ToolDrivingAgent:
         runtime: dict = {}
         tool_context = ToolContext(agent_context=context, runtime=runtime)
         if location == target:
-            tool = next(t for t in context.tools if t.name == "finish_schedule_segment")
+            tool = next(t for t in context.tools if t.name == "complete_current_schedule")
             tool.safe_call({"note": "已经在目标地点"}, tool_context)
             return AgentResponse(dialogue="已完成")
         destination = target if target in exits else exits[0]

@@ -25,7 +25,7 @@ import chromadb
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 
 from annie.npc import NPCAgent
-from annie.npc.response import ActionRequest, ActionResult, AgentResponse
+from annie.npc.core.response import ActionRequest, ActionResult, AgentResponse
 from annie.world_engine import DefaultWorldEngine
 from annie.world_engine.profile import NPCProfile
 

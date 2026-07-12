@@ -5,11 +5,13 @@ support ``NPCAgent`` and ``Executor`` during a single run.
 """
 
 from annie.npc.runtime.memory_context import MemoryContextBuilder
+from annie.npc.runtime.run_runtime import new_run_runtime
 from annie.npc.runtime.skill_runtime import SkillRuntime
 from annie.npc.runtime.tool_dispatcher import ToolDispatcher
 
 __all__ = [
     "MemoryContextBuilder",
+    "new_run_runtime",
     "SkillRuntime",
     "ToolDispatcher",
 ]

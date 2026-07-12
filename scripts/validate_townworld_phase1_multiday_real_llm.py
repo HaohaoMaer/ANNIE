@@ -29,11 +29,12 @@ from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
 from annie.npc import NPCAgent
-from annie.npc.config import load_model_config
+from annie.npc.model.config import load_model_config
 from annie.town import (
     ScheduleSegment,
     TownWorldEngine,
     create_small_town_state,
+    load_run_manifest,
     run_multi_npc_day,
 )
 
@@ -156,8 +157,9 @@ def run_validation(args: argparse.Namespace, run_dir: Path, terminal_output: Pat
     print(f"run_dir={run_dir}")
     print(f"terminal_output={terminal_output}")
     print(f"replay_dir={replay_dir}")
+    print(f"manifest_path={run_dir / 'manifest.json'}")
+    print(f"snapshot_path={run_dir / 'state' / 'latest.json'}")
     print(f"days={args.days}")
-    print(f"npc_id={args.npc_id}")
     print(f"time_window={minute_label(args.start_minute)}-{minute_label(args.end_minute)}")
 
     print_header("Model Config")
@@ -186,6 +188,9 @@ def run_validation(args: argparse.Namespace, run_dir: Path, terminal_output: Pat
         chroma_client=chromadb.PersistentClient(path=str(vector_dir)),
         history_dir=history_dir,
     )
+    npc_ids = resolve_npc_ids(engine, args.npc_ids)
+    primary_npc_id = npc_ids[0]
+    print(f"npc_ids={', '.join(npc_ids)}")
     checks = CheckBoard()
     forced_guard_result: dict[str, Any] = {
         "forced_guard_check_count": 0,
@@ -195,38 +200,54 @@ def run_validation(args: argparse.Namespace, run_dir: Path, terminal_output: Pat
 
     for day in range(1, args.days + 1):
         print_header(f"Day {day}: deterministic lifecycle bootstrap")
-        engine.start_day_for_resident(
-            args.npc_id,
+        engine.start_day_for_residents(
+            npc_ids,
             day=day,
             start_minute=args.start_minute,
             end_minute=args.end_minute,
         )
-        print_resident_day_state(engine, args.npc_id, day)
+        for npc_id in npc_ids:
+            print_resident_day_state(engine, npc_id, day)
 
         print_header(f"Day {day}: real LLM schedule generation")
-        traced_model.phase = f"day-{day}:schedule"
-        try:
-            accepted = engine.generate_day_plan_for_resident(
-                args.npc_id,
-                agent,
-                start_minute=args.start_minute,
-                end_minute=args.end_minute,
-            )
-        except Exception as exc:
-            checks.add(f"day {day} real LLM schedule accepted", False, repr(exc))
-            if not args.continue_on_error:
-                write_summary(run_dir, engine, traced_model, checks, terminal_output)
-                return 1
-        else:
-            checks.add(f"day {day} real LLM schedule accepted", bool(accepted))
-            print_schedule(accepted)
+        for npc_id in npc_ids:
+            traced_model.phase = f"day-{day}:{npc_id}:schedule"
+            try:
+                accepted = engine.generate_day_plan_for_resident(
+                    npc_id,
+                    agent,
+                    start_minute=args.start_minute,
+                    end_minute=args.end_minute,
+                )
+            except Exception as exc:
+                checks.add(f"day {day} {npc_id} real LLM schedule accepted", False, repr(exc))
+                if not args.continue_on_error:
+                    write_summary(
+                        run_dir,
+                        engine,
+                        traced_model,
+                        checks,
+                        terminal_output,
+                        npc_ids=npc_ids,
+                    )
+                    return 1
+            else:
+                checks.add(f"day {day} {npc_id} real LLM schedule accepted", bool(accepted))
+                print_schedule(accepted)
 
-        print_header(f"Day {day}: real LLM action ticks")
-        traced_model.phase = f"day-{day}:actions"
+        print_header(f"Day {day}: planning context proof")
+        for npc_id in npc_ids:
+            context = engine.build_context(npc_id, "检查真实 LLM planning 后的当前日程。")
+            current_schedule = context.extra["town"]["current_schedule"]
+            print(f"{npc_id} current_schedule:")
+            print(indent(json.dumps(current_schedule, ensure_ascii=False, indent=2)))
+
+        print_header(f"Day {day}: real LLM multi-NPC action ticks")
+        traced_model.phase = f"day-{day}:multi-npc-actions"
         result = run_multi_npc_day(
             engine,
             agent,
-            [args.npc_id],
+            npc_ids,
             start_minute=args.start_minute,
             end_minute=args.end_minute,
             max_ticks=args.max_ticks_per_day,
@@ -243,13 +264,21 @@ def run_validation(args: argparse.Namespace, run_dir: Path, terminal_output: Pat
             f"all_current_schedules_complete={result.all_current_schedules_complete} "
             f"max_ticks_exhausted={result.max_ticks_exhausted}"
         )
-        checks.add(f"day {day} action runner completed", result.ok, result.note)
+        checks.add(f"day {day} multi-NPC action runner completed", result.ok, result.note)
         if not result.ok:
             if not args.continue_on_error:
                 replay_paths = engine.write_replay_artifacts(replay_dir)
+                persistence_paths = write_persistence_paths(
+                    engine,
+                    run_dir,
+                    replay_paths,
+                    config_summary=config_summary(config),
+                    validation={"ok": checks.ok, "phase": "action_runner_error"},
+                )
                 print_header("Replay Paths")
                 for name, path in replay_paths.items():
                     print(f"{name}: {path}")
+                print_persistence_paths(persistence_paths)
                 write_summary(
                     run_dir,
                     engine,
@@ -257,35 +286,52 @@ def run_validation(args: argparse.Namespace, run_dir: Path, terminal_output: Pat
                     checks,
                     terminal_output,
                     forced_guard_result=forced_guard_result,
+                    persistence_paths=persistence_paths,
+                    npc_ids=npc_ids,
                 )
                 return 1
             continue
 
         print_header(f"Day {day}: day-end summary memory")
-        summary = engine.end_day_for_resident(args.npc_id, day=day)
-        print(summary)
-        day_summary = engine.memory_for(args.npc_id).grep(
-            "",
-            category="impression",
-            metadata_filters={"source": "town_day_summary", "day": day},
-        )
-        checks.add(
-            f"day {day} summary memory persisted after completed runner",
-            bool(day_summary),
-        )
+        summaries = engine.end_day_for_residents(npc_ids, day=day)
+        for npc_id, summary in summaries.items():
+            print(f"{npc_id}: {summary}")
+            day_summary = engine.memory_for(npc_id).grep(
+                "",
+                category="impression",
+                metadata_filters={"source": "town_day_summary", "day": day},
+            )
+            checks.add(
+                f"day {day} {npc_id} summary memory persisted after completed runner",
+                bool(day_summary),
+            )
 
     print_header("Phase 1 forced evidence checks")
     replay_paths = engine.write_replay_artifacts(replay_dir)
+    persistence_paths = write_persistence_paths(
+        engine,
+        run_dir,
+        replay_paths,
+        config_summary=config_summary(config),
+        validation={"ok": checks.ok, "phase": "final"},
+    )
     checkpoint_rows = read_jsonl(replay_paths["checkpoints"])
     final_snapshot = checkpoint_rows[-1]["snapshot"] if checkpoint_rows else {}
     real_loop_guard_count = len(engine.loop_guard_events)
     forced_guard_result = force_revision_and_loop_guards(
-        args.npc_id,
+        primary_npc_id,
         checks,
         run_dir=run_dir,
     )
     checks.add("real LLM was called", traced_model.call_count > 0, str(traced_model.call_count))
     checks.add("planning checkpoints replayed", bool(final_snapshot.get("planning_checkpoints")))
+    checks.add(
+        "multi-NPC replay includes every requested resident",
+        set(npc_ids).issubset(set(final_snapshot.get("residents", {}).keys()))
+        if isinstance(final_snapshot.get("residents"), dict)
+        else False,
+        ", ".join(npc_ids),
+    )
     checks.add(
         "real run loop guard replay consistent",
         not engine.loop_guard_events or bool(final_snapshot.get("loop_guard_events")),
@@ -297,10 +343,22 @@ def run_validation(args: argparse.Namespace, run_dir: Path, terminal_output: Pat
         f"forced_guard_count={forced_guard_result['forced_guard_check_count']}",
     )
     checks.add("timeline exists", replay_paths["timeline"].exists(), str(replay_paths["timeline"]))
+    if args.resume_smoke:
+        resumed = TownWorldEngine.resume_run(
+            run_dir,
+            chroma_client=chromadb.PersistentClient(path=str(vector_dir)),
+        )
+        checks.add(
+            "resume smoke loaded latest snapshot",
+            resumed.state.clock.minute == engine.state.clock.minute
+            and resumed.state.clock.day == engine.state.clock.day,
+            str(run_dir / "manifest.json"),
+        )
 
     print_header("Replay Paths")
     for name, path in replay_paths.items():
         print(f"{name}: {path}")
+    print_persistence_paths(persistence_paths)
 
     print_header("Summary")
     print(f"llm_call_count={traced_model.call_count}")
@@ -317,6 +375,8 @@ def run_validation(args: argparse.Namespace, run_dir: Path, terminal_output: Pat
         checks,
         terminal_output,
         forced_guard_result=forced_guard_result,
+        persistence_paths=persistence_paths,
+        npc_ids=npc_ids,
     )
 
     if checks.ok:
@@ -389,6 +449,8 @@ def write_summary(
     terminal_output: Path,
     *,
     forced_guard_result: dict[str, Any] | None = None,
+    persistence_paths: dict[str, Path] | None = None,
+    npc_ids: list[str] | None = None,
 ) -> None:
     forced_guard_result = forced_guard_result or {
         "forced_guard_check_count": 0,
@@ -397,11 +459,18 @@ def write_summary(
     }
     summary = {
         "ok": checks.ok,
+        "npc_ids": list(npc_ids or engine.state.resident_ids()),
         "llm_call_count": traced_model.call_count,
         "planning_log_count": len(engine.planning_log),
         "action_log_count": len(engine.action_log),
         "loop_guard_count": len(engine.loop_guard_events),
+        "lifecycle_failures": lifecycle_failures(engine),
+        "schedule_quality": schedule_quality(engine),
+        "memory_reflection_outcomes": memory_reflection_outcomes(engine),
         **forced_guard_result,
+        "persistence_paths": {
+            name: str(path) for name, path in (persistence_paths or {}).items()
+        },
         "terminal_output": str(terminal_output),
         "checks": [
             {"label": label, "ok": ok, "detail": detail}
@@ -411,6 +480,93 @@ def write_summary(
     path = run_dir / "summary.json"
     path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"summary_json={path}")
+
+
+def lifecycle_failures(engine: TownWorldEngine) -> list[dict[str, object]]:
+    failures: list[dict[str, object]] = []
+    for npc_id, action in sorted(engine.state.current_actions.items()):
+        if action.end_minute <= engine.state.clock.minute:
+            failures.append(
+                {
+                    "kind": "due_current_action_not_finalized",
+                    "npc_id": npc_id,
+                    "action_type": action.action_type,
+                    "end_minute": action.end_minute,
+                    "clock_minute": engine.state.clock.minute,
+                }
+            )
+    return failures
+
+
+def schedule_quality(engine: TownWorldEngine) -> dict[str, object]:
+    completed_count = sum(
+        len(items) for items in engine.state.completed_schedule_segments.values()
+    )
+    overdue_count = sum(
+        1 for item in engine.planning_log if item.get("stage") == "schedule_overdue"
+    )
+    revision_count = sum(
+        1 for item in engine.planning_log if item.get("stage") == "schedule_revision"
+    )
+    return {
+        "completed_count": completed_count,
+        "overdue_count": overdue_count,
+        "revision_count": revision_count,
+        "loop_guard_count": len(engine.loop_guard_events),
+    }
+
+
+def memory_reflection_outcomes(engine: TownWorldEngine) -> dict[str, object]:
+    return {
+        npc_id: {
+            "reflection_events": len(resident.reflection_evidence),
+            "day_summary_count": len(
+                engine.memory_for(npc_id).grep(
+                    "",
+                    category="impression",
+                    metadata_filters={"source": "town_day_summary"},
+                    k=20,
+                )
+            ),
+        }
+        for npc_id, resident in sorted(engine.state.residents.items())
+    }
+
+
+def config_summary(config: Any) -> dict[str, object]:
+    return {
+        "config_path": "config/model_config.yaml",
+        "provider": config.model.provider,
+        "model": config.model.model_name,
+        "base_url": config.model.base_url,
+        "api_key_env": config.model.api_key_env,
+    }
+
+
+def write_persistence_paths(
+    engine: TownWorldEngine,
+    run_dir: Path,
+    replay_paths: dict[str, Path],
+    *,
+    config_summary: dict[str, object],
+    validation: dict[str, object],
+) -> dict[str, Path]:
+    paths = engine.save_run(
+        run_dir,
+        run_id=run_dir.name,
+        replay_paths=replay_paths,
+        model_summary=config_summary,
+        validation=validation,
+    )
+    # Validate manifest readability immediately so path errors surface in the validation log.
+    load_run_manifest(paths["manifest"])
+    return paths
+
+
+def print_persistence_paths(paths: dict[str, Path]) -> None:
+    print_header("Persistence Paths")
+    for name, path in paths.items():
+        print(f"{name}: {path}")
 
 
 def print_resident_day_state(engine: TownWorldEngine, npc_id: str, day: int) -> None:
@@ -434,12 +590,25 @@ def print_schedule(schedule: list[ScheduleSegment]) -> None:
 
 
 def parse_args() -> argparse.Namespace:
+    return build_parser().parse_args()
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run Phase 1 TownWorld multi-day validation with a real LLM."
     )
     parser.add_argument("--model-config", default="config/model_config.yaml")
     parser.add_argument("--output-dir", type=Path, default=None)
-    parser.add_argument("--npc-id", default="alice")
+    parser.add_argument(
+        "--npc-id",
+        action="append",
+        dest="npc_ids",
+        default=None,
+        help=(
+            "NPC id to include. Repeat for multiple NPCs. "
+            "Defaults to all residents in the scenario."
+        ),
+    )
     parser.add_argument("--days", type=int, default=2)
     parser.add_argument("--start-minute", type=int, default=8 * 60)
     parser.add_argument("--end-minute", type=int, default=9 * 60)
@@ -449,7 +618,29 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--preview-chars", type=int, default=1600)
     parser.add_argument("--verbose-messages", action="store_true")
     parser.add_argument("--continue-on-error", action="store_true")
-    return parser.parse_args()
+    parser.add_argument(
+        "--resume-smoke",
+        action="store_true",
+        help="Load the latest manifest snapshot after validation and compare the clock.",
+    )
+    return parser
+
+
+def resolve_npc_ids(engine: TownWorldEngine, requested: list[str] | None) -> list[str]:
+    available = engine.state.resident_ids()
+    if requested is None:
+        return available
+    npc_ids = [npc_id.strip() for npc_id in requested if npc_id.strip()]
+    unknown = sorted(set(npc_ids) - set(available))
+    if unknown:
+        raise SystemExit(
+            "Unknown NPC id(s): "
+            + ", ".join(unknown)
+            + f". Available: {', '.join(available)}"
+        )
+    if not npc_ids:
+        raise SystemExit("At least one --npc-id must be non-empty.")
+    return npc_ids
 
 
 def default_run_dir() -> Path:

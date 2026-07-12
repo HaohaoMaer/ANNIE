@@ -11,7 +11,7 @@ import pytest
 from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
 
 from annie.npc.agent import NPCAgent
-from annie.npc.response import AgentResponse
+from annie.npc.core.response import AgentResponse
 from annie.world_engine import DefaultWorldEngine
 from annie.world_engine.profile import NPCProfile
 

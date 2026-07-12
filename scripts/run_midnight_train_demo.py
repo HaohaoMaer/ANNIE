@@ -22,8 +22,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from annie.npc.config import load_model_config
-from annie.world_engine.world_engine_agent import WorldEngineAgent
+from annie.npc.model.config import load_model_config  # noqa: E402
+from annie.world_engine.world_engine_agent import WorldEngineAgent  # noqa: E402
 
 BOLD = "\033[1m"
 GREEN = "\033[32m"

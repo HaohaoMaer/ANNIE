@@ -7,8 +7,8 @@ import chromadb
 import pytest
 
 from annie.npc.agent import NPCAgent
-from annie.npc.config import load_model_config
-from annie.npc.llm import create_chat_model
+from annie.npc.model.config import load_model_config
+from annie.npc.model.llm import create_chat_model
 from annie.town import TownWorldEngine, create_small_town_state, run_multi_npc_day
 
 

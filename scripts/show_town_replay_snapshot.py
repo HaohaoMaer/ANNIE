@@ -8,8 +8,8 @@ from pathlib import Path
 
 import chromadb
 
-from annie.npc.context import AgentContext
-from annie.npc.response import AgentResponse
+from annie.npc.core.context import AgentContext
+from annie.npc.core.response import AgentResponse
 from annie.npc.tools.base_tool import ToolContext
 from annie.town import TownEvent, TownWorldEngine, create_small_town_state, run_multi_npc_day
 
@@ -21,18 +21,20 @@ class DrivingAgent:
     def run(self, context: AgentContext) -> AgentResponse:
         tool_context = ToolContext(agent_context=context, runtime={})
         town = context.extra["town"]
+        if town.get("conversation_session_id"):
+            return AgentResponse(dialogue="好的。")
         if (
             context.npc_id == "alice"
             and town["location_id"] == "cafe"
             and "bob" in town["visible_npc_ids"]
             and not self._spoke
         ):
-            self._tool(context, "speak_to").safe_call(
-                {"target_npc_id": "bob", "text": "我来买一杯咖啡。"},
+            self._tool(context, "talk_to").safe_call(
+                {"target_npc_id": "bob", "topic_or_reason": "我来买一杯咖啡。"},
                 tool_context,
             )
             self._spoke = True
-            self._tool(context, "finish_schedule_segment").safe_call(
+            self._tool(context, "complete_current_schedule").safe_call(
                 {"note": "已经向 Bob 点单"},
                 tool_context,
             )
@@ -40,7 +42,7 @@ class DrivingAgent:
 
         target = town["current_schedule_target_location_id"]
         if town["location_id"] == target:
-            self._tool(context, "finish_schedule_segment").safe_call(
+            self._tool(context, "complete_current_schedule").safe_call(
                 {"note": "已经在目标地点"},
                 tool_context,
             )
