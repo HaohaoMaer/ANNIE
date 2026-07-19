@@ -51,7 +51,14 @@ class WorldEngine(ABC):
         event: str,
         max_action_steps: int = 8,
     ) -> AgentResponse:
-        """Drive an NPC until it produces a final response or hits step budget."""
+        """Drive an NPC until it produces a final response or hits step budget.
+
+        Handles three action-result statuses:
+        - ``succeeded`` / ``partial``: result rendered as next event, loop continues.
+        - ``deferred``: action is still in progress (e.g. long-running movement).
+          The loop breaks and the world engine's tick polls for completion.
+        - ``failed``: result rendered as next event, loop continues (agent can retry).
+        """
         current_event = event
         last_result: ActionResult | None = None
         for _ in range(max_action_steps):
@@ -63,6 +70,11 @@ class WorldEngine(ABC):
 
             result = self.execute_action(npc_id, response.actions[0])
             last_result = result
+            if result.status == "deferred":
+                # Action is still running — break the loop and let the world
+                # engine's tick poll for completion.
+                self.handle_response(npc_id, response)
+                return response
             current_event = _render_action_result_event(result)
 
         observation = (

@@ -82,6 +82,23 @@ EXECUTOR_SYSTEM_PROMPT = """\
 - 不要输出 planner JSON，也不要解释你的内部流程。
 """
 
+EXECUTOR_ACTION_SYSTEM_PROMPT = """\
+{identity}
+<working_memory>
+{working_memory}
+</working_memory>
+<todo>
+{todo}
+</todo>
+
+你正在执行一个自主行动循环。关键指令：
+
+- 你是一个行动执行器，不是一个角色扮演者。不要"扮演NPC"，不要产生对话文本。
+- 收到环境数据后，立即调用工具执行动作。不要先描述你看到了什么。
+- 不要内心独白，不要解释推理过程。
+- 不需要调用工具时，用一句话简洁报告当前状态（如"已完成：收集了4个原木"）。不要展开叙述，不要角色对话。
+"""
+
 REFLECTOR_SYSTEM_PROMPT = """\
 你是 NPC 的复盘模块。你的职责是从 NPC 视角总结刚刚发生的执行结果，并声明可能需要写入记忆的内容。
 
@@ -199,24 +216,41 @@ def build_executor_messages(
     skills: list["SkillDef"],
 ) -> list[BaseMessage]:
     """Build Executor messages from the shared prompt contract."""
-    system = SystemMessage(content=EXECUTOR_SYSTEM_PROMPT.format(
-        identity=render_identity(ctx),
-        world_rules=_with_label(getattr(ctx, "world_rules", ""), "最高优先级规则"),
-        situation=_with_label(getattr(ctx, "situation", ""), "当前场景状态"),
-        memory_categories=MEMORY_CATEGORIES_BLOCK,
-        working_memory=_with_label(working_memory, "本轮预检索的长期记忆摘要，可能不完整"),
-        todo=_with_label(todo_text, "跨回合目标背景，不代表本轮必须执行"),
-        skills=render_skills_text(skills),
-    ))
-    history_msgs = history_to_messages(getattr(ctx, "history", ""), getattr(ctx, "npc_id", ""))
-    trigger_sections = [_section("input_event", getattr(ctx, "input_event", ""), "本轮触发事件")]
-    if getattr(task, "description", "") != "__skip__":
-        trigger_sections.append(_section("task", getattr(task, "description", ""), "计划器要求本轮执行的具体任务"))
-    return [
-        system,
-        *history_msgs,
-        HumanMessage(content="请基于当前事件继续扮演角色。\n\n" + "\n".join(trigger_sections)),
-    ]
+    action_only = getattr(ctx, "extra", {}).get("action_only", False)
+
+    if action_only:
+        template = EXECUTOR_ACTION_SYSTEM_PROMPT
+        system = SystemMessage(content=template.format(
+            identity=render_identity(ctx),
+            working_memory=_with_label(working_memory, "长期记忆摘要"),
+            todo=_with_label(todo_text, "待办事项"),
+        ))
+        trigger_sections = [_section("input_event", getattr(ctx, "input_event", ""), "本轮触发事件")]
+        if getattr(task, "description", "") != "__skip__":
+            trigger_sections.append(_section("task", getattr(task, "description", ""), "具体任务"))
+        return [
+            system,
+            HumanMessage(content="根据环境数据选择下一步动作。直接调用工具，不要叙述。\n\n" + "\n".join(trigger_sections)),
+        ]
+    else:
+        system = SystemMessage(content=EXECUTOR_SYSTEM_PROMPT.format(
+            identity=render_identity(ctx),
+            world_rules=_with_label(getattr(ctx, "world_rules", ""), "最高优先级规则"),
+            situation=_with_label(getattr(ctx, "situation", ""), "当前场景状态"),
+            memory_categories=MEMORY_CATEGORIES_BLOCK,
+            working_memory=_with_label(working_memory, "本轮预检索的长期记忆摘要，可能不完整"),
+            todo=_with_label(todo_text, "跨回合目标背景，不代表本轮必须执行"),
+            skills=render_skills_text(skills),
+        ))
+        history_msgs = history_to_messages(getattr(ctx, "history", ""), getattr(ctx, "npc_id", ""))
+        trigger_sections = [_section("input_event", getattr(ctx, "input_event", ""), "本轮触发事件")]
+        if getattr(task, "description", "") != "__skip__":
+            trigger_sections.append(_section("task", getattr(task, "description", ""), "计划器要求本轮执行的具体任务"))
+        return [
+            system,
+            *history_msgs,
+            HumanMessage(content="请基于当前事件继续扮演角色。\n\n" + "\n".join(trigger_sections)),
+        ]
 
 
 def build_reflector_messages(

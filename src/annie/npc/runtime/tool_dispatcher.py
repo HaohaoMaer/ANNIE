@@ -57,9 +57,33 @@ class ToolDispatcher:
         tool_call: dict[str, Any],
         agent_context: "AgentContext",
     ) -> "ToolDispatchResult":
-        """Execute one tool_call and return structured dispatch metadata."""
+        """Execute one tool_call and return structured dispatch metadata.
+
+        Before executing, checks for an optional ``_pre_tool_hook`` in
+        ``agent_context.extra``.  Game engines (e.g. Minecraft) use this to
+        inject danger checks between ReAct tool calls — if the hook returns a
+        non-empty string, the tool is skipped and the string is returned as
+        an interrupt message that the LLM can respond to.
+        """
         name = tool_call.get("name", "")
         args = tool_call.get("args", {}) or {}
+
+        # ── Pre-tool hook (danger interrupt, etc.) ──────────────────────
+        pre_hook = agent_context.extra.get("_pre_tool_hook")
+        if pre_hook is not None:
+            try:
+                interrupt_msg = pre_hook(tool_call)
+            except Exception:
+                interrupt_msg = None
+            if interrupt_msg:
+                logger.info("Pre-tool hook interrupted %s: %s", name, interrupt_msg[:120])
+                return ToolDispatchResult(
+                    tool=None,
+                    payload={"tool": name, "success": False, "interrupted": True, "reason": interrupt_msg},
+                    rendered=interrupt_msg,
+                    content=interrupt_msg,
+                )
+
         tool = self.tool_registry.get(name)
         if tool is None:
             payload = {"tool": name, "success": False, "error": "tool not found"}

@@ -1,0 +1,18 @@
+{
+  "name": "annie-minecraft-bridge",
+  "version": "0.1.0",
+  "description": "Mineflayer bridge for ANNIE NPC framework",
+  "private": true,
+  "type": "module",
+  "main": "minecraft_bridge.js",
+  "dependencies": {
+    "@napi-rs/canvas": "^1.0.2",
+    "gl": "^8.1.6",
+    "minecraft-data": "^3.97.0",
+    "mineflayer": "^4.33.0",
+    "mineflayer-pathfinder": "^2.4.5",
+    "node-canvas-webgl": "^0.3.0",
+    "prismarine-viewer": "^1.33.0",
+    "vec3": "^0.1.8"
+  }
+}

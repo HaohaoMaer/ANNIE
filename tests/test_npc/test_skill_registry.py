@@ -27,8 +27,8 @@ def test_loads_valid_skill(tmp_path):
     d.mkdir()
     (d / "skill.yaml").write_text(
         "name: myskill\none_line: Does something\nextra_tools: []\n"
-    )
-    (d / "prompt.md").write_text("Do something great.")
+    , encoding='utf-8')
+    (d / "prompt.md").write_text("Do something great.", encoding='utf-8')
     registry = load_dir(tmp_path)
     skill = registry.get("myskill")
     assert skill is not None
@@ -41,7 +41,7 @@ def test_loads_valid_skill(tmp_path):
 def test_missing_prompt_md_raises(tmp_path):
     d = tmp_path / "broken"
     d.mkdir()
-    (d / "skill.yaml").write_text("name: broken\none_line: broken\n")
+    (d / "skill.yaml").write_text("name: broken\none_line: broken\n", encoding='utf-8')
     with pytest.raises(FileNotFoundError, match="prompt.md"):
         load_dir(tmp_path)
 
@@ -50,7 +50,7 @@ def test_directory_without_yaml_is_skipped(tmp_path):
     """A subdir with only prompt.md (no skill.yaml) is silently ignored."""
     d = tmp_path / "not_a_skill"
     d.mkdir()
-    (d / "prompt.md").write_text("Some text")
+    (d / "prompt.md").write_text("Some text", encoding='utf-8')
     registry = load_dir(tmp_path)
     assert registry.list_skills() == []
 
@@ -61,8 +61,8 @@ def test_load_succeeds_with_unresolvable_extra_tools(tmp_path):
     d.mkdir()
     (d / "skill.yaml").write_text(
         "name: heavy\none_line: heavy\nextra_tools:\n  - ghost_tool\n"
-    )
-    (d / "prompt.md").write_text("Heavy prompt.")
+    , encoding='utf-8')
+    (d / "prompt.md").write_text("Heavy prompt.", encoding='utf-8')
     registry = load_dir(tmp_path)
     skill = registry.get("heavy")
     assert skill is not None
@@ -75,8 +75,8 @@ def test_extra_tools_unregistered_raises_on_activate(tmp_path):
     d.mkdir()
     (d / "skill.yaml").write_text(
         "name: heavy\none_line: heavy\nextra_tools:\n  - ghost_tool\n"
-    )
-    (d / "prompt.md").write_text("Heavy prompt.")
+    , encoding='utf-8')
+    (d / "prompt.md").write_text("Heavy prompt.", encoding='utf-8')
     registry = load_dir(tmp_path)
     runtime = SkillRuntime(registry)
     tool_registry = ToolRegistry()
@@ -88,8 +88,8 @@ def test_multiple_skills_loaded(tmp_path):
     for name, line in [("alpha", "Alpha skill"), ("beta", "Beta skill")]:
         d = tmp_path / name
         d.mkdir()
-        (d / "skill.yaml").write_text(f"name: {name}\none_line: {line}\n")
-        (d / "prompt.md").write_text(f"You are in {name} mode.")
+        (d / "skill.yaml").write_text(f"name: {name}\none_line: {line}\n", encoding='utf-8')
+        (d / "prompt.md").write_text(f"You are in {name} mode.", encoding='utf-8')
     registry = load_dir(tmp_path)
     assert registry.get("alpha") is not None
     assert registry.get("beta") is not None
@@ -101,8 +101,8 @@ def test_triggers_loaded_as_metadata(tmp_path):
     d.mkdir()
     (d / "skill.yaml").write_text(
         "name: reasoning\none_line: reason\ntriggers:\n  - 推理\n  - 分析\n"
-    )
-    (d / "prompt.md").write_text("Reason carefully.")
+    , encoding='utf-8')
+    (d / "prompt.md").write_text("Reason carefully.", encoding='utf-8')
     registry = load_dir(tmp_path)
     skill = registry.get("reasoning")
     assert skill is not None

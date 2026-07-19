@@ -114,11 +114,11 @@ def main() -> None:
 
     checkpoints = [
         json.loads(line)
-        for line in result.replay_paths["checkpoints"].read_text().splitlines()
+        for line in result.replay_paths["checkpoints"].read_text(encoding='utf-8').splitlines()
     ]
     reflections = [
         json.loads(line)
-        for line in result.replay_paths["reflections"].read_text().splitlines()
+        for line in result.replay_paths["reflections"].read_text(encoding='utf-8').splitlines()
     ]
     first_snapshot = checkpoints[0]["snapshot"]
 

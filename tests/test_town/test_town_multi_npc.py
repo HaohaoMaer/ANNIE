@@ -539,7 +539,7 @@ def test_perception_smoke_script_reports_pass() -> None:
         cwd=Path(__file__).parents[2],
         check=False,
         capture_output=True,
-        text=True,
+        encoding="utf-8",
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
@@ -552,7 +552,7 @@ def test_replay_snapshot_smoke_script_reports_pass() -> None:
         cwd=Path(__file__).parents[2],
         check=False,
         capture_output=True,
-        text=True,
+        encoding="utf-8",
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
@@ -916,14 +916,14 @@ def test_multi_npc_day_smoke_generates_replay(tmp_path) -> None:
     timeline_path = result.replay_paths["timeline"]
     checkpoints_path = result.replay_paths["checkpoints"]
     reflections_path = result.replay_paths["reflections"]
-    action_rows = [json.loads(line) for line in actions_path.read_text().splitlines()]
+    action_rows = [json.loads(line) for line in actions_path.read_text(encoding='utf-8').splitlines()]
     checkpoint_rows = [
-        json.loads(line) for line in checkpoints_path.read_text().splitlines()
+        json.loads(line) for line in checkpoints_path.read_text(encoding='utf-8').splitlines()
     ]
 
     assert any(row["action_type"] == "move_to" for row in action_rows)
     assert any(row["action_type"] == "speak_to" for row in action_rows)
-    assert "speak_to" in timeline_path.read_text()
+    assert "speak_to" in timeline_path.read_text(encoding='utf-8')
     assert checkpoint_rows
     assert reflections_path.exists()
     first_snapshot = checkpoint_rows[0]["snapshot"]
@@ -969,7 +969,7 @@ def test_replay_snapshot_records_closed_conversation_session(tmp_path) -> None:
         replay_dir=tmp_path / "replay",
     )
 
-    checkpoint = json.loads(result.replay_paths["checkpoints"].read_text().splitlines()[0])
+    checkpoint = json.loads(result.replay_paths["checkpoints"].read_text(encoding='utf-8').splitlines()[0])
     sessions = checkpoint["snapshot"]["conversation_sessions"]
     assert len(sessions) == 1
     assert sessions[0] == {
@@ -1016,7 +1016,7 @@ def test_runner_reflection_is_opt_in_and_replayable(tmp_path) -> None:
     assert engine.reflection_due_for("alice") is True
     assert engine.reflection_log == []
     no_reflection_checkpoint = json.loads(
-        no_reflection.replay_paths["checkpoints"].read_text().splitlines()[0]
+        no_reflection.replay_paths["checkpoints"].read_text(encoding='utf-8').splitlines()[0]
     )
     assert no_reflection_checkpoint["snapshot"]["reflection_events"] == []
 
@@ -1036,7 +1036,7 @@ def test_runner_reflection_is_opt_in_and_replayable(tmp_path) -> None:
     assert reflected.ticks[0].ran_npc_ids == []
     reflection_rows = [
         json.loads(line)
-        for line in reflected.replay_paths["reflections"].read_text().splitlines()
+        for line in reflected.replay_paths["reflections"].read_text(encoding='utf-8').splitlines()
     ]
     assert len(reflection_rows) == 1
     assert reflection_rows[0]["tick"] == reflected.ticks[0].tick
@@ -1045,7 +1045,7 @@ def test_runner_reflection_is_opt_in_and_replayable(tmp_path) -> None:
     assert reflection_rows[0]["trigger_poignancy"] == 7
     assert reflection_rows[0]["evidence_count"] == 2
     checkpoint = json.loads(
-        reflected.replay_paths["checkpoints"].read_text().splitlines()[-1]
+        reflected.replay_paths["checkpoints"].read_text(encoding='utf-8').splitlines()[-1]
     )
     snapshot = checkpoint["snapshot"]
     assert snapshot["reflection_events"] == reflection_rows
@@ -1242,7 +1242,7 @@ def test_multi_day_runner_replays_schedule_planning_evidence(tmp_path) -> None:
 
     checkpoint_rows = [
         json.loads(line)
-        for line in result.replay_paths["checkpoints"].read_text().splitlines()
+        for line in result.replay_paths["checkpoints"].read_text(encoding='utf-8').splitlines()
     ]
     final_snapshot = checkpoint_rows[-1]["snapshot"]
 
@@ -1254,7 +1254,7 @@ def test_multi_day_runner_replays_schedule_planning_evidence(tmp_path) -> None:
         for item in final_snapshot["planning_checkpoints"]
     )
     assert final_snapshot["residents"]["alice"]["day_plan"]["day"] == 2
-    assert "planning" in result.replay_paths["timeline"].read_text()
+    assert "planning" in result.replay_paths["timeline"].read_text(encoding='utf-8')
 
 
 def test_forced_guard_check_does_not_pollute_real_replay(tmp_path) -> None:
@@ -1275,7 +1275,7 @@ def test_forced_guard_check_does_not_pollute_real_replay(tmp_path) -> None:
     )
     checkpoint_rows = [
         json.loads(line)
-        for line in result.replay_paths["checkpoints"].read_text().splitlines()
+        for line in result.replay_paths["checkpoints"].read_text(encoding='utf-8').splitlines()
     ]
 
     assert result.ok is True
@@ -1290,7 +1290,7 @@ def test_forced_guard_check_does_not_pollute_real_replay(tmp_path) -> None:
     replay_paths = engine.write_replay_artifacts(tmp_path / "real_replay_after_forced")
     final_rows = [
         json.loads(line)
-        for line in replay_paths["checkpoints"].read_text().splitlines()
+        for line in replay_paths["checkpoints"].read_text(encoding='utf-8').splitlines()
     ]
 
     assert forced["forced_guard_check_count"] > 0
@@ -1311,7 +1311,7 @@ def _run_replay_signature(tmp_path: Path) -> list[dict[str, object]]:
     )
     rows = [
         json.loads(line)
-        for line in result.replay_paths["checkpoints"].read_text().splitlines()
+        for line in result.replay_paths["checkpoints"].read_text(encoding='utf-8').splitlines()
     ]
     signature: list[dict[str, object]] = []
     for row in rows:

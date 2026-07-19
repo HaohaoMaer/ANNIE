@@ -60,3 +60,9 @@ tsconfig.tsbuildinfo
 
 # External reference implementation copied locally
 GenerativeAgentsCN/
+
+# Minecraft generated runtime data
+data/minecraft/recordings/
+data/minecraft/test_run/
+data/minecraft/*_history/
+data/minecraft/history/

@@ -167,8 +167,8 @@ def test_available_skills_rendered_in_executor_system(tmp_path, tmp_chroma):
     skill_dir.mkdir(parents=True)
     (skill_dir / "skill.yaml").write_text(
         "name: myfeat\none_line: 我的特殊能力\nextra_tools: []\n"
-    )
-    (skill_dir / "prompt.md").write_text("Feature prompt.")
+    , encoding='utf-8')
+    (skill_dir / "prompt.md").write_text("Feature prompt.", encoding='utf-8')
 
     we = DefaultWorldEngine(chroma_client=tmp_chroma, history_dir=tmp_path / "hist")
     we.register_profile("alice", NPCProfile(name="Alice"))
@@ -217,8 +217,8 @@ def test_use_skill_appends_system_message(tmp_path, tmp_chroma):
     skill_dir.mkdir(parents=True)
     (skill_dir / "skill.yaml").write_text(
         "name: spy\none_line: Spy skill\nextra_tools:\n  - memory_recall\n"
-    )
-    (skill_dir / "prompt.md").write_text("You are in spy mode. Gather intel.")
+    , encoding='utf-8')
+    (skill_dir / "prompt.md").write_text("You are in spy mode. Gather intel.", encoding='utf-8')
 
     we = DefaultWorldEngine(chroma_client=tmp_chroma, history_dir=tmp_path / "hist")
     we.register_profile("spy_npc", NPCProfile(name="Spy"))
