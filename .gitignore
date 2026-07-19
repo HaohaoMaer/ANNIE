@@ -31,15 +31,6 @@ models/
 # Traces (generated output)
 data/traces/
 
-# Commercial game script materials (copyrighted content)
-午夜列车/
-data/npcs/何侦探/
-data/npcs/撒乘客/
-data/npcs/林乘客/
-data/npcs/白乘客/
-data/npcs/董乘客/
-data/npcs/鸥乘务/
-
 # IDE - Trae
 .trae/
 
@@ -56,14 +47,12 @@ tsconfig.tsbuildinfo
 # AI coding tool instructions (local only, not part of project)
 AGENTS.md
 CLAUDE.md
+PROJECT_INTERVIEW.md
 
 # Codex/OpenSpec project instructions
 !.codex/
 !.codex/skills/
 !.codex/skills/**
-
-# External reference implementation copied locally
-GenerativeAgentsCN/
 
 # Minecraft generated runtime data
 data/minecraft/recordings/
