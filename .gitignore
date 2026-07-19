@@ -53,6 +53,10 @@ tsconfig.tsbuildinfo
 /skills/
 /.claude/
 
+# AI coding tool instructions (local only, not part of project)
+AGENTS.md
+CLAUDE.md
+
 # Codex/OpenSpec project instructions
 !.codex/
 !.codex/skills/
